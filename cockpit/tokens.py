@@ -12,11 +12,10 @@ Bindings are set by explicit acts only: `connect` and the one-time migration.
 
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from cockpit.backup import BackupStore
-from cockpit.config import _read, origin
+from cockpit.config import origin, setting, update
 from cockpit.secrets import SecretStore
 from cockpit.paths import Paths, keychain_service
 
@@ -29,7 +28,7 @@ CONNECT = "moshi-cockpit connect"
 
 def bound_origin(paths: Paths, identity: str) -> Optional[str]:
     if identity in NON_AGENT:
-        bound = _read(paths).get("bound") or {}
+        bound = setting(paths, "bound")
         value = bound.get(identity) if isinstance(bound, dict) else None
         return value if isinstance(value, str) else None
     from cockpit.registry import find
@@ -59,15 +58,13 @@ def bind_identity(paths: Paths, backup: BackupStore, identity: str, url: str, re
     """Binds a token that is not an agent's (device, register, ocellio-default) to the origin of `url`."""
     if identity not in NON_AGENT:
         raise ValueError(f"'{identity}' is an agent: its binding lives in the agent list")
-    data = _read(paths)
-    bound = data.get("bound") if isinstance(data.get("bound"), dict) else {}
+    bound = _bindings(paths)
     value = origin(url)
     if bound.get(identity) not in (None, value) and not rebind:
         raise ValueError(f"'{identity}' is bound to {bound[identity]}, but the config points to {value}; "
                          "the binding stays as it is")
     bound[identity] = value
-    data["bound"] = bound
-    backup.write_text(paths.mesh_config, json.dumps(data, indent=2) + "\n", mode=0o600)
+    update(paths, backup, "bound", bound)
     return value
 
 
@@ -75,11 +72,14 @@ def unbind_identity(paths: Paths, backup: BackupStore, identity: str) -> bool:
     """Drops a binding that is not an agent's (used when its token is removed). True if there was one."""
     if identity not in NON_AGENT:
         raise ValueError(f"'{identity}' is an agent: its binding lives in the agent list")
-    data = _read(paths)
-    bound = data.get("bound") if isinstance(data.get("bound"), dict) else {}
+    bound = _bindings(paths)
     if identity not in bound:
         return False
     del bound[identity]
-    data["bound"] = bound
-    backup.write_text(paths.mesh_config, json.dumps(data, indent=2) + "\n", mode=0o600)
+    update(paths, backup, "bound", bound)
     return True
+
+
+def _bindings(paths: Paths) -> dict:
+    bound = setting(paths, "bound")
+    return dict(bound) if isinstance(bound, dict) else {}

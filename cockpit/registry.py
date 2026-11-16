@@ -23,8 +23,9 @@ from cockpit.paths import Paths
 # recipient names in moshi-cockpit: ASCII only, so no path parts ("../x"), spaces or Unicode look-alikes.
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 # Names with a meaning of their own: moshi's operator and fan-out, the human at the cockpit, and the
-# registration token's binding key (tokens.py keeps non-agent bindings under these names).
-RESERVED = {"admin", "broadcast", "cockpit", "register"}
+# installation's own Keychain entries and binding keys (moshi-device/device, moshi-register/register,
+# ocellio-default/default): an agent of that name would share them.
+RESERVED = {"admin", "broadcast", "cockpit", "default", "device", "register"}
 MAX_ROLE = 120
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 
@@ -47,10 +48,10 @@ class Agent:
 def validate_name(name: str) -> str:
     name = name or ""  # not stripped: a name with surrounding whitespace is a different name, refuse it
     if not NAME_RE.fullmatch(name):
-        raise ValueError("Ungültiger Agent-Name (Buchstaben, Ziffern, _ und -, am Anfang Buchstabe oder Ziffer, "
-                         "höchstens 64 Zeichen)")
+        raise ValueError("Invalid agent name (letters, digits, _ and -, starting with a letter or digit, "
+                         "at most 64 characters)")
     if name.lower() in RESERVED:
-        raise ValueError(f"'{name}' ist reserviert ({', '.join(sorted(RESERVED))})")
+        raise ValueError(f"'{name}' is reserved ({', '.join(sorted(RESERVED))})")
     return name
 
 
