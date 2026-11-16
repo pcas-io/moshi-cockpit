@@ -146,8 +146,12 @@ def require(config: Config, name: str) -> str:
 
 
 def moshi_base(url: str) -> str:
-    """https://host/mcp → https://host (for /api/admin and /agents/connect)."""
-    return url[: -len("/mcp")] if url.endswith("/mcp") else url.rstrip("/")
+    """The origin moshi's API lives at: https://host/mcp, https://host/mcp/ and https://host/x/mcp all give
+    https://host (scheme://netloc as written; an IPv6 host keeps its brackets)."""
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        raise ValueError(f"Not a server URL: '{url[:80]}'")
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"  # never user:password@
 
 
 MAX_RULES = 4000

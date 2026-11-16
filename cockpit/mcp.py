@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from cockpit.http import MAX_BODY, HttpFailure, no_redirect_opener, send
 from cockpit.paths import USER_AGENT
 from cockpit.text import clean
 
@@ -29,16 +31,20 @@ def parse_body(content_type: str, body: str) -> Dict[str, Any]:
     if not body.strip():
         return {}
     try:
-        return json.loads(body)
-    except ValueError as exc:
-        raise McpError("Antwort des Servers ist kein gültiges JSON") from exc
+        message = json.loads(body)
+    except (ValueError, RecursionError):  # RecursionError: JSON nested deeper than the parser goes
+        raise McpError("Antwort des Servers ist kein gültiges JSON") from None
+    if not isinstance(message, dict):
+        raise McpError("The server's answer is no JSON-RPC message")
+    return message
 
 
 class McpClient:
-    def __init__(self, url: str, token: str, opener: Opener = urllib.request.urlopen, timeout: float = 20) -> None:
+    def __init__(self, url: str, token: str, opener: Optional[Opener] = None, timeout: float = 20) -> None:
+        """Without an `opener`, redirects are refused: urllib would forward the bearer to any origin."""
         self._url = url
         self._token = token
-        self._opener = opener
+        self._opener = opener or no_redirect_opener()
         self._timeout = timeout
         self._session: Optional[str] = None
         self._next_id = 1
@@ -49,6 +55,8 @@ class McpClient:
             self._initialize()
         message = self._request("tools/call", {"name": name, "arguments": arguments or {}})
         result = message.get("result") or {}
+        if not isinstance(result, dict):
+            raise McpError(f"Tool {name}: the server's result is no object")
         if result.get("isError"):
             raise McpError(f"Tool {name} meldet einen Fehler: {clean(_first_text(result), limit=200)}")
         text = _first_text(result)
@@ -56,6 +64,8 @@ class McpClient:
             return json.loads(text) if text else {}
         except ValueError:
             return {"text": text}
+        except RecursionError:  # nested deeper than the parser goes
+            raise McpError(f"Tool {name}: the server's result is nested too deep") from None
 
     def _initialize(self) -> None:
         params = {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
@@ -68,7 +78,7 @@ class McpClient:
         self._next_id += 1
         _, message = self._post({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         if "error" in message:
-            err = message["error"] or {}
+            err = message["error"] if isinstance(message["error"], dict) else {}
             raise McpError(f"{method}: {clean(err.get('message'), 'Fehler', limit=200)}")
         return message
 
@@ -84,19 +94,25 @@ class McpClient:
             headers["Mcp-Session-Id"] = self._session
         request = urllib.request.Request(self._url, data=json.dumps(payload).encode(), headers=headers, method="POST")
         try:
-            with self._opener(request, timeout=self._timeout) as response:
-                session = response.headers.get("Mcp-Session-Id")
-                if session:
-                    self._session = session
-                elif self._session is None:
-                    self._session = ""  # stateless server: remember that initialize happened
-                body = response.read().decode("utf-8", errors="replace")
-                return response.status, parse_body(response.headers.get("Content-Type", ""), body)
-        except urllib.error.HTTPError as exc:
-            exc.close()  # the error holds the open response
-            raise McpError(f"HTTP {exc.code} von {self._url}") from None
-        except urllib.error.URLError as exc:
-            raise McpError(f"{self._url} nicht erreichbar ({exc.reason})") from None
+            reply = send(self._opener, request, self._timeout)
+        except HttpFailure as failure:
+            raise McpError(self._explain(failure)) from None
+        session = reply.headers.get("Mcp-Session-Id")
+        if session:
+            self._session = session
+        elif self._session is None:
+            self._session = ""  # stateless server: remember that initialize happened
+        body = reply.body.decode("utf-8", errors="replace")
+        return reply.status, parse_body(reply.headers.get("Content-Type", ""), body)
+
+    def _explain(self, failure: HttpFailure) -> str:
+        if failure.kind == "redirect":
+            return f"HTTP {failure.status} from {self._url}: redirect refused, not followed"
+        if failure.kind == "http":
+            return f"HTTP {failure.status} von {self._url}"
+        if failure.kind == "unreachable":
+            return f"{self._url} nicht erreichbar"
+        return f"{self._url} answered without usable HTTP (garbage, cut off or over {MAX_BODY // 1024} KiB)"
 
 
 def probe_unauthenticated(url: str, opener: Opener = urllib.request.urlopen) -> Tuple[int, str]:
@@ -114,10 +130,15 @@ def probe_unauthenticated(url: str, opener: Opener = urllib.request.urlopen) -> 
         return exc.code, exc.headers.get("WWW-Authenticate", "") if exc.headers else ""
     except urllib.error.URLError as exc:
         raise McpError(f"{url} nicht erreichbar ({exc.reason})") from None
+    except OSError:  # a timeout or a dropped connection outside URLError
+        raise McpError(f"{url} nicht erreichbar") from None
+    except http.client.HTTPException:
+        raise McpError(f"{url} answered without usable HTTP") from None
 
 
 def _first_text(result: Dict[str, Any]) -> str:
-    for item in result.get("content") or []:
-        if item.get("type") == "text":
+    content = result.get("content")
+    for item in content if isinstance(content, list) else []:
+        if isinstance(item, dict) and item.get("type") == "text":
             return str(item.get("text", ""))
     return ""
