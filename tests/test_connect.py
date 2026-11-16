@@ -1,5 +1,6 @@
 """`moshi-cockpit connect`: one browser approval against FakeMoshi. Fake keychain, no real browser, no waiting."""
 
+import dataclasses
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -23,14 +24,18 @@ OCELLIO_ENTRY = ("ocellio-default", "default")
 RT = "rt_" + "a" * 26 + "_" + "b" * 43
 
 
-class Flaky:
-    """MoshiApi whose device_token fails `failures` times as if the network were down, then answers."""
+class Served:
+    """FakeMoshi through MoshiApi, with its approval page moved to `link` (FakeMoshi runs on 127.0.0.1, the
+    config needs https) and `failures` polls lost as if the network were down."""
 
-    def __init__(self, api, failures):
-        self.api, self.failures = api, failures
+    def __init__(self, api, link, failures=0):
+        self.api, self.link, self.failures = api, link, failures
 
-    def device_authorize(self, *args, **kwargs):
-        return self.api.device_authorize(*args, **kwargs)
+    def device_authorize(self, label, device_key=None):
+        start = self.api.device_authorize(label, device_key=device_key)
+        served = origin(start.verification_uri)
+        return dataclasses.replace(start, verification_uri=start.verification_uri.replace(served, self.link, 1),
+                                   verification_uri_complete=start.verification_uri_complete.replace(served, self.link, 1))
 
     def device_token(self, device_code):
         if self.failures:
@@ -39,15 +44,26 @@ class Flaky:
         return self.api.device_token(device_code)
 
 
+class Failing:
+    def __init__(self, error):
+        self.error = error
+
+    def device_authorize(self, *args, **kwargs):
+        raise self.error
+
+
 class ConnectTest(unittest.TestCase):
     def setUp(self):
         self.ctx, self.fake = context(self)
         configure(self.ctx.paths)
         self.moshi = serve(self)
-        self.api = MoshiApi(self.moshi.url)
+        self.api = self.served()
         self.said, self.prompts, self.opened, self.slept = [], [], [], []
         self.answers = [OCELLIO_TOKEN]
         self.decision = self.moshi.approve  # what the person does in the browser
+
+    def served(self, link=origin(MOSHI), failures=0):
+        return Served(MoshiApi(self.moshi.url), link, failures)
 
     def ask(self, prompt):
         self.prompts.append(prompt)
@@ -99,8 +115,8 @@ class ConnectTest(unittest.TestCase):
         shown = f"{code[:4]}-{code[4:]}"
         self.assertEqual(self.said[:2], [
             "Connecting this Herdr to moshi.",
-            f"Confirm in your browser. If it opens on another device, go to {self.moshi.origin}/link and enter {shown}."])
-        self.assertEqual(self.opened, [f"{self.moshi.origin}/link?code={shown}"])
+            f"Confirm in your browser. If it opens on another device, go to {origin(MOSHI)}/link and enter {shown}."])
+        self.assertEqual(self.opened, [f"{origin(MOSHI)}/link?code={shown}"])
         self.assertIn('Connected as "Herdr on test-mac".', self.said)
         self.assertEqual(self.said[-1], connect.DONE)
         self.assertEqual(self.slept, [5])  # moshi's interval before the first poll
@@ -174,12 +190,12 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(self.fake.entries, {})
 
     def test_a_network_failure_while_polling_is_retried_with_the_same_interval(self):
-        self.assertEqual(self.run_connect(api=Flaky(self.api, 3)), 0)
+        self.assertEqual(self.run_connect(api=self.served(failures=3)), 0)
         self.assertEqual(self.slept, [5, 5, 5, 5])
         self.assertIsNotNone(self.entry(REGISTER_ENTRY))
 
     def test_a_network_failure_until_the_expiry_ends_with_one_clear_line(self):
-        self.assertEqual(self.run_connect(api=Flaky(self.api, 10 ** 6)), 1)
+        self.assertEqual(self.run_connect(api=self.served(failures=10 ** 6)), 1)
         self.assertEqual(sum(self.slept), 600)
         self.assertEqual(self.said[-1], connect.LOST)
         self.assertEqual(self.fake.entries, {})
@@ -218,12 +234,56 @@ class ConnectTest(unittest.TestCase):
             self.run_connect()
         self.assertEqual(self.moshi.requests, [])
 
-    def test_a_herdr_connected_to_another_moshi_sends_nothing(self):
-        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.DEVICE, "https://other.example/mcp")
-        with self.assertRaises(ValueError):
-            self.run_connect()
-        self.assertEqual(self.moshi.requests, [])
-        self.assertEqual(self.fake.entries, {})
+    def test_a_herdr_connected_to_another_moshi_sends_nothing_and_says_what_to_do(self):
+        for identity in (tokens.DEVICE, tokens.REGISTER):
+            with self.subTest(identity=identity):
+                configure(self.ctx.paths)
+                self.ctx.keychain.write(*DEVICE_ENTRY, "dk_other-device-key-1234")
+                tokens.bind_identity(self.ctx.paths, self.ctx.backup, identity, "https://other.example/mcp")
+                with self.assertRaises(ValueError) as caught:
+                    self.run_connect()
+                self.assertEqual(str(caught.exception), connect.ANOTHER)
+                self.assertEqual(self.moshi.requests, [])
+                self.assertEqual(self.entry(DEVICE_ENTRY), "dk_other-device-key-1234")
+
+    def test_a_device_key_bound_to_no_server_is_never_sent_and_connects_anew(self):
+        self.ctx.keychain.write(*DEVICE_ENTRY, "dk_unbound-device-key-1234")
+        self.assertEqual(self.run_connect(), 0)
+        self.assertIn(connect.UNKNOWN, self.said)
+        self.assertIsNone(self.moshi.calls("POST", "/api/device/authorize")[0]["auth"])
+        self.assertFalse(any("dk_unbound" in str(r) for r in self.moshi.requests))
+        self.assertEqual(self.moshi.live_installation(self.entry(DEVICE_ENTRY))["label"], "Herdr on test-mac")
+        self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.DEVICE), origin(MOSHI))
+
+    def test_an_approval_page_of_another_origin_is_never_opened(self):
+        self.decision = lambda code: None
+
+        def sleep(seconds):
+            self.slept.append(seconds)
+            self.moshi.approve(next(iter(self.moshi.flows.values()))["user_code"])
+        self.assertEqual(self.run_connect(api=self.served(link=self.moshi.origin), sleep=sleep), 0)
+        self.assertEqual(self.opened, [])
+        code = next(iter(self.moshi.flows.values()))["user_code"]
+        self.assertEqual(self.said[1], f"Open {self.moshi.origin}/link in your browser and enter {code[:4]}-{code[4:]}.")
+        self.assertIsNotNone(self.entry(REGISTER_ENTRY))
+
+    def test_a_server_error_at_the_start_is_not_called_unreachable(self):
+        self.assertEqual(self.run_connect(api=Failing(MoshiError("http_error", 503))), 1)
+        self.assertEqual(self.said[-1], "moshi answered with an error (503). Try again later.")
+        with self.assertRaises(MoshiError):
+            self.run_connect(api=Failing(MoshiError("too_many_requests", 429)))
+
+    def test_a_valid_approval_with_only_the_ocellio_token_missing_skips_the_browser(self):
+        self.run_connect()
+        del self.fake.entries[OCELLIO_ENTRY]
+        self.said.clear()
+        self.answers = [OCELLIO_TOKEN]
+        self.assertEqual(self.run_connect(), 0)
+        self.assertEqual(len(self.moshi.calls("POST", "/api/device/authorize")), 1)
+        self.assertEqual(len(self.opened), 1)
+        self.assertEqual(self.said, [connect.ALREADY, connect.DONE])
+        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(self.entry(OCELLIO_ENTRY), OCELLIO_TOKEN)
 
     def test_the_label_defaults_to_the_host_name(self):
         io = connect.ConnectIO(ask_secret=self.ask, say=self.said.append)
@@ -317,6 +377,12 @@ class ApprovalValidTest(unittest.TestCase):
         self.assertTrue(self.valid(datetime(2026, 11, 16, 12, 29, tzinfo=timezone.utc)))
         self.assertFalse(self.valid(datetime(2026, 11, 16, 12, 31, tzinfo=timezone.utc)))
 
+    def test_a_naive_now_counts_as_utc(self):
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
+        self.expires("2026-11-16T12:00:00.000Z")
+        self.assertTrue(self.valid(datetime(2026, 11, 16, 11, 59)))
+        self.assertFalse(self.valid(datetime(2026, 11, 16, 12, 1)))
+
     def test_without_a_registration_token_it_is_false(self):
         self.expires("2099-01-01T00:00:00Z")
         self.assertFalse(self.valid())
@@ -396,6 +462,19 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn(str(error), text)
             held.assert_called_once()
+
+    def test_ctrl_c_is_one_line_and_still_waits(self):
+        code, text, held, _ = self.run_connect(error=KeyboardInterrupt(), tty=True)
+        self.assertEqual(code, 130)
+        self.assertIn("Cancelled.", text)
+        self.assertNotIn("Traceback", text)
+        held.assert_called_once()
+
+    def test_closed_input_is_one_line_and_does_not_wait(self):
+        code, text, held, _ = self.run_connect(error=EOFError(), tty=True)
+        self.assertEqual(code, 1)
+        self.assertIn("Cancelled.", text)
+        held.assert_not_called()
 
     def test_without_moshi_it_says_so(self):
         save_servers(self.ctx.paths, self.ctx.backup, {"moshi": ""})

@@ -155,17 +155,24 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
-    """Runs in a tab of its own, which closes with the process: the outcome stays readable until Enter."""
-    code = 1
+    """Runs in a tab of its own, which closes with the process: the outcome stays readable until Enter
+    (not after stdin closed: nobody can press it)."""
+    code, wait = 1, True
     try:
         ctx = _context(paths)
         code = connect.run(ctx, connect.ConnectIO(), MoshiApi(require(load_config(paths), "moshi")))
     except (KeychainError, MoshiError, ValueError, OSError) as exc:  # OSError: network, browser
         print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
-    if sys.stdin.isatty():
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        code = 130
+    except EOFError:
+        print("\nCancelled.", file=sys.stderr)
+        wait = False
+    if wait and sys.stdin.isatty():
         try:
             input("\nEnter closes this tab. ")
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             pass
     return code
 

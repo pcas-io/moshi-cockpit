@@ -15,7 +15,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
 from cockpit.backup import BackupStore
@@ -101,6 +101,21 @@ def _read(paths: Paths) -> Dict:
     if not isinstance(data, dict):
         raise ValueError(f"{paths.mesh_config} hat ein unerwartetes Format")
     return data
+
+
+def setting(paths: Paths, key: str) -> Any:
+    """One top-level value of config.json (None when absent), e.g. `bound` or `register_expires_at`."""
+    return _read(paths).get(key)
+
+
+def update(paths: Paths, backup: BackupStore, key: str, value: Any) -> bool:
+    """Sets one top-level value of config.json (None removes it); the rest stays, owner-only like before."""
+    data = _read(paths)
+    if value is None:
+        data.pop(key, None)
+    else:
+        data[key] = value
+    return backup.write_text(paths.mesh_config, json.dumps(data, indent=2) + "\n", mode=0o600)
 
 
 def load_config(paths: Paths) -> Config:

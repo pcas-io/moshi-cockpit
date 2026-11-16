@@ -13,7 +13,6 @@ Until ocellio has an approval of its own, the person's ocellio token is asked fo
 from __future__ import annotations
 
 import getpass
-import json
 import platform
 import socket
 import subprocess
@@ -25,7 +24,7 @@ from typing import Callable, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
 from cockpit.agents import AgentContext
-from cockpit.config import _read, load_config, origin, require
+from cockpit.config import load_config, origin, require, setting, update
 from cockpit.moshi_api import DeviceGrant, DeviceStart, MoshiApi, MoshiError, parse_timestamp
 from cockpit.paths import Paths, keychain_service
 from cockpit.secrets import KeychainError, SecretStore, validate_token
@@ -43,6 +42,11 @@ EXPIRED = "The code expired. Run connect again."
 DENIED = "Connection was denied in moshi."
 LOST = "Lost the connection to moshi while waiting for your approval. Check the network and run connect again."
 UNREACHABLE = "Could not reach moshi at {origin}. Check the network and run connect again."
+SERVER_ERROR = "moshi answered with an error ({status}). Try again later."
+ANOTHER = ("This Herdr is connected to another moshi. Run moshi-cockpit uninstall or remove the old connection in "
+           "the Keychain, then connect again.")
+UNKNOWN = "This Herdr's earlier connection is unknown here; connecting it again."
+ALREADY = "This Herdr is connected to moshi already."
 OCELLIO_PROMPT = "Your ocellio token (input hidden, stays in the Keychain): "
 NO_OCELLIO = "No valid ocellio token entered, nothing stored. Run connect again to add it."
 
@@ -73,34 +77,26 @@ def needs_connect(paths: Paths, config, store: SecretStore) -> bool:
 
 
 def register_expires_at(paths: Paths) -> Optional[str]:
-    value = _read(paths).get(EXPIRES_KEY)
+    value = setting(paths, EXPIRES_KEY)
     return value if isinstance(value, str) else None
 
 
 def approval_valid(paths: Paths, store: SecretStore, now: Optional[datetime] = None) -> bool:
-    """A registration token is stored and `register_expires_at` lies after `now` (an aware datetime)."""
+    """A registration token is stored and `register_expires_at` lies after `now` (a naive one counts as UTC)."""
     if not store.exists(*REGISTER_ENTRY):
         return False
     try:
         expires = parse_timestamp(register_expires_at(paths) or "")
     except ValueError:
         return False
-    return expires > (now or datetime.now(timezone.utc))
-
-
-def _save_register_expires_at(ctx: AgentContext, value: str) -> None:
-    data = _read(ctx.paths)
-    data[EXPIRES_KEY] = value
-    ctx.backup.write_text(ctx.paths.mesh_config, json.dumps(data, indent=2) + "\n", mode=0o600)
+    now = now or datetime.now(timezone.utc)
+    return expires > (now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now)
 
 
 def _refuse_another_moshi(paths: Paths, url: str) -> None:
     """A device key or registration token of another moshi is never sent, and never replaced unasked."""
-    for identity in (DEVICE, REGISTER):
-        bound = bound_origin(paths, identity)
-        if bound not in (None, origin(url)):
-            raise ValueError(f"This Herdr is connected to {bound}, but the config points to {origin(url)}; "
-                             "nothing was sent")
+    if any(bound_origin(paths, identity) not in (None, origin(url)) for identity in (DEVICE, REGISTER)):
+        raise ValueError(ANOTHER)
 
 
 def _transient(exc: MoshiError) -> bool:
@@ -109,9 +105,11 @@ def _transient(exc: MoshiError) -> bool:
 
 
 def _start(ctx: AgentContext, io: ConnectIO, api: MoshiApi, url: str, label: str) -> Tuple[DeviceStart, bool]:
-    """A renewal with the device key when there is one (True); a new installation when there is none or
-    moshi no longer knows it."""
-    if ctx.keychain.exists(*DEVICE_ENTRY):
+    """A renewal with the device key when there is one (True); a new installation when there is none, it is
+    bound to no server (never sent then), or moshi no longer knows it."""
+    if ctx.keychain.exists(*DEVICE_ENTRY) and bound_origin(ctx.paths, DEVICE) is None:
+        io.say(UNKNOWN)
+    elif ctx.keychain.exists(*DEVICE_ENTRY):
         try:
             return api.device_authorize(label, device_key=moshi_token(ctx.paths, ctx.keychain, DEVICE, url)), True
         except MoshiError as exc:
@@ -159,12 +157,16 @@ def _store(ctx: AgentContext, url: str, grant: DeviceGrant, renewal: bool) -> No
         bind_identity(ctx.paths, ctx.backup, DEVICE, url)
         ctx.keychain.write(*DEVICE_ENTRY, grant.device_key)
     ctx.keychain.write(*REGISTER_ENTRY, grant.registration_token, strict=True)  # macOS asks on every read
-    _save_register_expires_at(ctx, grant.registration_expires_at)
+    update(ctx.paths, ctx.backup, EXPIRES_KEY, grant.registration_expires_at)
+
+
+def _ocellio_missing(ctx: AgentContext, config) -> bool:
+    return config.has("ocellio") and not ctx.keychain.exists(*OCELLIO_ENTRY)
 
 
 def _ocellio(ctx: AgentContext, io: ConnectIO, config) -> int:
     """Asked once, hidden, and only while missing."""
-    if not config.has("ocellio") or ctx.keychain.exists(*OCELLIO_ENTRY):
+    if not _ocellio_missing(ctx, config):
         return 0
     token = io.ask_secret(OCELLIO_PROMPT).strip()
     try:
@@ -177,30 +179,54 @@ def _ocellio(ctx: AgentContext, io: ConnectIO, config) -> int:
     return 0
 
 
-def run(ctx: AgentContext, io: ConnectIO, api: MoshiApi, opener: Callable[[str], bool] = open_browser,
-        sleep: Callable[[float], None] = time.sleep, label: Optional[str] = None) -> int:
-    """0 once this Herdr is connected; 1 with one sentence when the attempt ended. `label` defaults to the
-    host name. Errors that are not part of the flow (keychain, config, moshi's refusals) are raised."""
-    config = load_config(ctx.paths)
-    url = require(config, "moshi")
-    _refuse_another_moshi(ctx.paths, url)
+def _same_origin(link: str, url: str) -> bool:
+    try:
+        return origin(link) == origin(url)
+    except ValueError:  # a malformed port
+        return False
+
+
+def _connect_moshi(ctx: AgentContext, io: ConnectIO, api: MoshiApi, url: str, opener: Callable[[str], bool],
+                   sleep: Callable[[float], None], label: str) -> int:
     io.say("Connecting this Herdr to moshi.")
     try:
-        start, renewal = _start(ctx, io, api, url, f"Herdr on {label or socket.gethostname()}")
+        start, renewal = _start(ctx, io, api, url, label)
     except MoshiError as exc:
-        if not _transient(exc):
+        if exc.reason == "unreachable":
+            io.say(UNREACHABLE.format(origin=origin(url)))
+        elif exc.status >= 500:
+            io.say(SERVER_ERROR.format(status=exc.status))
+        else:
             raise
-        io.say(UNREACHABLE.format(origin=origin(url)))
         return 1
-    io.say(f"Confirm in your browser. If it opens on another device, go to {clean(start.verification_uri)} "
-           f"and enter {clean(start.user_code)}.")
-    opener(start.verification_uri_complete)
+    link, code = clean(start.verification_uri), clean(start.user_code)
+    if _same_origin(start.verification_uri_complete, url):
+        io.say(f"Confirm in your browser. If it opens on another device, go to {link} and enter {code}.")
+        opener(start.verification_uri_complete)
+    else:  # a page of another server is never opened unasked
+        io.say(f"Open {link} in your browser and enter {code}.")
     outcome = _wait(api, start, sleep)
     if not isinstance(outcome, DeviceGrant):
         io.say(outcome)
         return 1
     _store(ctx, url, outcome, renewal)
     io.say(f'Connected as "{clean(outcome.installation_label, "?", limit=64)}".')
+    return 0
+
+
+def run(ctx: AgentContext, io: ConnectIO, api: MoshiApi, opener: Callable[[str], bool] = open_browser,
+        sleep: Callable[[float], None] = time.sleep, label: Optional[str] = None) -> int:
+    """0 once this Herdr is connected; 1 with one sentence when the attempt ended. `label` defaults to the
+    host name. Errors that are not part of the flow (keychain, config, moshi's refusals) are raised.
+    With a valid approval and only the ocellio token missing, there is no browser step."""
+    config = load_config(ctx.paths)
+    url = require(config, "moshi")
+    _refuse_another_moshi(ctx.paths, url)
+    if (_ocellio_missing(ctx, config) and ctx.keychain.exists(*DEVICE_ENTRY)
+            and bound_origin(ctx.paths, DEVICE) is not None and approval_valid(ctx.paths, ctx.keychain)):
+        io.say(ALREADY)
+    elif _connect_moshi(ctx, io, api, url, opener, sleep, f"Herdr on {label or socket.gethostname()}"):
+        return 1
     if _ocellio(ctx, io, config):
         return 1
     io.say(DONE)
