@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
-from cockpit import agents, defaults, herdr
-from cockpit.admin import ADMIN_ACCOUNT, ADMIN_SERVICE
-from cockpit.secrets import SecretStore
+from cockpit import agents, compat, defaults
+from cockpit.compat import FAIL, OK, WARN
+from cockpit.secrets import HardenedStore, SecretStore
 from cockpit.secrets.macos import pending_service, stale_parked_message
 from cockpit.mcp import McpError, probe_unauthenticated
 from cockpit.config import load_config, origin
-from cockpit.paths import COCKPIT_IDENTITY, Paths, keychain_service
+from cockpit.paths import Paths, keychain_service
 from cockpit.registry import load_agents
-from cockpit.pins import Pin, PinError, verify_codesign
 from cockpit.text import clean
-
-OK, WARN, FAIL = "ok", "warn", "fail"
+from cockpit.tokens import DEVICE, NON_AGENT, OCELLIO_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -31,65 +29,39 @@ class Check:
 class DoctorContext:
     paths: Paths
     keychain: SecretStore
-    pins: dict
     probe: Callable = probe_unauthenticated
-    core_version: Callable = herdr.installed_core_version
-    codesign: Callable = verify_codesign
-    bundle: Callable = herdr.installed_bundle
+    herdr_versions: Callable[[Paths], Tuple[Optional[str], Optional[str]]] = compat.installed_versions
 
 
-def check_versions(ctx: DoctorContext) -> List[Check]:
-    results = []
-    sources = (("herdr-core", ctx.core_version(ctx.paths)), ("herdr-app", herdr.installed_app_version(ctx.paths)))
-    for component, installed in sources:
-        pin: Pin = ctx.pins[component]
-        state = herdr.drift(installed, pin)
-        shown = ".".join(map(str, installed)) if installed else "–"
-        if state == "missing":
-            results.append(Check(component, FAIL, f"nicht installiert (Pin {pin.version}), moshi-cockpit install"))
-            continue
-        bundle = ctx.bundle(component, ctx.paths)
-        if bundle is None:
-            results.append(Check(component, FAIL, f"{shown} gemeldet, aber kein App-Bundle gefunden (Signatur nicht prüfbar)"))
-            continue
-        try:
-            ctx.codesign(bundle, pin)
-        except PinError as exc:
-            results.append(Check(component, FAIL, f"{shown} installiert, aber {exc}"))
-            continue
-        if state == "equal":
-            results.append(Check(component, OK, f"{shown} = Pin"))
-        else:
-            # Herdr.app updates itself and cannot be stopped from doing so: report, don't fail.
-            results.append(Check(component, WARN, f"{shown} ist {'neuer' if state == 'newer' else 'älter'} "
-                                                  f"als der Pin {pin.version}; Pin prüfen und per PR anheben"))
-    return results
+def check_herdr(ctx: DoctorContext) -> List[Check]:
+    """Herdr is installed from herdr.dev; a version this release was not tested with only warns."""
+    return [Check(f.name, f.status, f.detail) for f in compat.check(*ctx.herdr_versions(ctx.paths))]
 
 
 def check_telemetry(ctx: DoctorContext) -> List[Check]:
     if defaults.telemetry_off(ctx.paths):
-        return [Check("telemetry", OK, "herdr-app Telemetrie aus")]
-    return [Check("telemetry", FAIL, f"Telemetrie nicht aus ({ctx.paths.herdr_settings}), moshi-cockpit install")]
+        return [Check("telemetry", OK, "Herdr telemetry is off")]
+    return [Check("telemetry", FAIL, f"Telemetry is not off ({ctx.paths.herdr_settings}), run moshi-cockpit install")]
 
 
 def check_permissions(ctx: DoctorContext) -> List[Check]:
     findings = defaults.permission_findings(ctx.paths)
     if not findings:
-        return [Check("permissions", OK, "Config, App-Home und Socket nur für dich schreibbar")]
+        return [Check("permissions", OK, "Config, app home and socket are writable by you only")]
     return [Check("permissions", FAIL, "; ".join(findings))]
 
 
 def check_mods(ctx: DoctorContext) -> List[Check]:
     unknown = defaults.unknown_mods(ctx.paths)
     if not unknown:
-        return [Check("mods", OK, "nur bekannte Mods")]
-    return [Check("mods", WARN, "unbekannte Mods (Mods laufen mit vollen Rechten, bitte prüfen): " + ", ".join(unknown))]
+        return [Check("mods", OK, "known mods only")]
+    return [Check("mods", WARN, "unknown mods (mods run with full rights, please check them): " + ", ".join(unknown))]
 
 
 def check_cockpit(ctx: DoctorContext) -> List[Check]:
     findings = defaults.cockpit_findings(ctx.paths)
     if not findings:
-        return [Check("cockpit", OK, "Layout cockpit eingerichtet")]
+        return [Check("cockpit", OK, "cockpit layout set up")]
     return [Check("cockpit", WARN, "; ".join(findings) + ". " + defaults.RERUN_HINT)]
 
 
@@ -107,10 +79,17 @@ def _agents(ctx: DoctorContext):
         return [], str(exc)
 
 
+def _non_agent_entry(identity: str) -> Tuple[str, str]:
+    """Keychain service and account of a token that is not an agent's (see tokens.py)."""
+    if identity == OCELLIO_DEFAULT:
+        return keychain_service("ocellio", "default"), "default"
+    return keychain_service("moshi", identity), identity
+
+
 def parked_entries(ctx: DoctorContext) -> List[tuple]:
     names = [a.name for a in _agents(ctx)[0]]
     entries = [(keychain_service(server, name), name) for name in names for server in ("ocellio", "moshi")]
-    return entries + [(keychain_service("moshi", COCKPIT_IDENTITY), COCKPIT_IDENTITY), (ADMIN_SERVICE, ADMIN_ACCOUNT)]
+    return entries + [_non_agent_entry(identity) for identity in NON_AGENT]
 
 
 def check_config(ctx: DoctorContext) -> List[Check]:
@@ -119,32 +98,26 @@ def check_config(ctx: DoctorContext) -> List[Check]:
     if error:
         return [Check("config", FAIL, error)]
     if not config.servers:
-        return [Check("config", OK, "keine Server eingerichtet: Agents lokal, ohne moshi und ocellio")]
+        return [Check("config", OK, "no servers set up: agents run locally, without moshi and ocellio")]
     detail = ", ".join(f"{name} {url}" for name, url in sorted(config.servers.items()))
     return [Check("config", OK, detail)]
 
 
 def check_identities(ctx: DoctorContext) -> List[Check]:
-    """The cockpit identity, the admin token and the registration token are origin-bound like agents
-    (tokens.py). Only whether an entry exists is asked; no token is read."""
+    """The device key is origin-bound like an agent's token (tokens.py). Only whether the entry exists is
+    asked; no token is read."""
     config, error = _config(ctx)
     if error or not config.has("moshi"):
         return []
-    from cockpit.admin import ADMIN_ACCOUNT, ADMIN_SERVICE
-    from cockpit.register import REGISTER_ACCOUNT, REGISTER_SERVICE
-    from cockpit.tokens import ADMIN, REGISTER, check
-    results = []
-    for identity, service, account in ((COCKPIT_IDENTITY, keychain_service("moshi", COCKPIT_IDENTITY), COCKPIT_IDENTITY),
-                                       (ADMIN, ADMIN_SERVICE, ADMIN_ACCOUNT),
-                                       (REGISTER, REGISTER_SERVICE, REGISTER_ACCOUNT)):
-        if not ctx.keychain.exists(service, account):
-            continue
-        try:
-            check(ctx.paths, identity, config.servers["moshi"])
-            results.append(Check(f"identity-{identity}", OK, f"an {origin(config.servers['moshi'])} gebunden"))
-        except ValueError as exc:
-            results.append(Check(f"identity-{identity}", FAIL, str(exc)))
-    return results
+    from cockpit.tokens import check
+    service, account = _non_agent_entry(DEVICE)
+    if not ctx.keychain.exists(service, account):
+        return []
+    try:
+        check(ctx.paths, DEVICE, config.servers["moshi"])
+    except ValueError as exc:
+        return [Check(f"identity-{DEVICE}", FAIL, str(exc))]
+    return [Check(f"identity-{DEVICE}", OK, f"bound to {origin(config.servers['moshi'])}")]
 
 
 def check_rules(ctx: DoctorContext) -> List[Check]:
@@ -156,9 +129,9 @@ def check_rules(ctx: DoctorContext) -> List[Check]:
     from cockpit.harnesses import HARNESSES
     outside = sorted(a.name for a in registered if not HARNESSES[a.harness].native_mesh)
     if not outside:
-        return [Check("rules", OK, "eigene Regeln gehen an alle Agents")]
-    return [Check("rules", WARN, "eigene Regeln erreichen " + ", ".join(outside) + " nicht automatisch: dort selbst "
-                  "pflegen (Konto-Einstellungen)")]
+        return [Check("rules", OK, "your own rules reach every agent")]
+    return [Check("rules", WARN, "your own rules do not reach " + ", ".join(outside) + " by themselves: keep them "
+                  "there yourself (account settings)")]
 
 
 def check_menu(ctx: DoctorContext) -> List[Check]:
@@ -167,18 +140,22 @@ def check_menu(ctx: DoctorContext) -> List[Check]:
 
 
 def check_parked(ctx: DoctorContext) -> List[Check]:
-    """Parked copies of an interrupted strict keychain rewrite (keychain.py): never silently left over."""
+    """Parked copies of an interrupted hardened rewrite (secrets/macos.py): never silently left over. Only a
+    store that hardens entries parks copies; any other store has nothing to report."""
+    store = ctx.keychain
+    if not isinstance(store, HardenedStore):
+        return []
     findings = []
     for service, account in parked_entries(ctx):
-        if not ctx.keychain.has_parked(service, account):
+        if not store.has_parked(service, account):
             continue
-        if ctx.keychain.exists(service, account):
+        if store.exists(service, account):
             findings.append(stale_parked_message(service, account))
         else:
-            findings.append(f"'{service}' fehlt, die Sicherung '{pending_service(service)}' ist da: "
-                            f"moshi-cockpit bot add … --strict-keychain stellt sie wieder her")
+            findings.append(f"'{service}' is missing, its hardened backup '{pending_service(service)}' is still "
+                            "there: store the token again, that replaces the backup")
     if not findings:
-        return [Check("keychain-parked", OK, "keine liegengebliebenen Sicherungen")]
+        return [Check("keychain-parked", OK, "no backups left over")]
     return [Check("keychain-parked", WARN, " | ".join(findings))]
 
 
@@ -193,9 +170,9 @@ def check_endpoints(ctx: DoctorContext) -> List[Check]:
             results.append(Check(f"endpoint-{name}", FAIL, str(exc)))
             continue
         if status == 401 and challenge.lower().startswith("bearer"):
-            results.append(Check(f"endpoint-{name}", OK, f"{url} antwortet 401 + Bearer"))
+            results.append(Check(f"endpoint-{name}", OK, f"{url} answers 401 + Bearer"))
         else:
-            results.append(Check(f"endpoint-{name}", FAIL, f"{url} antwortet {status} (erwartet 401 + Bearer)"))
+            results.append(Check(f"endpoint-{name}", FAIL, f"{url} answers {status} (expected 401 + Bearer)"))
     return results
 
 
@@ -203,9 +180,9 @@ def check_agents(ctx: DoctorContext) -> List[Check]:
     config, error = _config(ctx)
     registered, agents_error = _agents(ctx)
     if error or agents_error:
-        return [Check("agents", FAIL, agents_error or "Config fehlerhaft, Agents nicht prüfbar")]
+        return [Check("agents", FAIL, agents_error or "config is broken, agents cannot be checked")]
     if not registered:
-        return [Check("agents", OK, "noch keine Agents (moshi-cockpit agent add)")]
+        return [Check("agents", OK, "no agents yet (moshi-cockpit agent add)")]
     actx = agents.AgentContext(paths=ctx.paths, backup=None, keychain=ctx.keychain)
     from cockpit.registry import single_instance_problems
     results = [Check("agents", FAIL, problem) for problem in single_instance_problems(registered)]
@@ -213,11 +190,11 @@ def check_agents(ctx: DoctorContext) -> List[Check]:
         findings = agents.findings(actx, agent)
         label = f"{agent.harness}" + (f", {agent.role}" if agent.role else "")
         results.append(Check(f"agent-{agent.name}", FAIL if findings else OK,
-                             "; ".join(findings) or f"{label}: Keychain + Config ok"))
+                             "; ".join(findings) or f"{label}: Keychain and config ok"))
     return results
 
 
-CHECKS = (check_versions, check_telemetry, check_permissions, check_mods, check_cockpit, check_config,
+CHECKS = (check_herdr, check_telemetry, check_permissions, check_mods, check_cockpit, check_config,
           check_endpoints, check_agents, check_identities, check_rules, check_menu, check_parked)
 
 
@@ -228,46 +205,44 @@ def run(ctx: DoctorContext) -> List[Check]:
     return results
 
 
-INSTALL = "Führe moshi-cockpit install aus"
+INSTALL = "Run moshi-cockpit install"
 
 
 def _action(check: Check) -> str:
     """The problem and the one thing to do about it, as a single sentence."""
     name, detail = check.name, check.detail
-    if name in ("herdr-core", "herdr-app"):
-        if "nicht installiert" in detail:
-            return f"{name} fehlt: {INSTALL}"
-        return f"{name} ist nicht vertrauenswürdig installiert: Entferne es und führe moshi-cockpit install aus"
+    if name == "herdr":
+        return f"Herdr is not installed: Install it from {compat.HERDR_URL}, then run moshi-cockpit install"
     if name == "telemetry":
-        return f"Die Telemetrie von Herdr ist nicht aus: {INSTALL}"
+        return f"Herdr's telemetry is not off: {INSTALL}"
     if name == "permissions":
-        if "schreibbar" in detail:
-            return f"Nimm anderen die Schreibrechte mit chmod go-w: {detail}"
-        return f"Prüfe diesen Pfad: {detail}"
+        if "schreibbar" in detail:  # defaults.permission_findings
+            return f"Take the write permission away from others with chmod go-w: {detail}"
+        return f"Check this path: {detail}"
     if name == "config":
-        return f"Korrigiere deine Konfiguration: {detail}"
+        return f"Fix your configuration: {detail}"
     if name.startswith("endpoint-"):
         server = name[len("endpoint-"):]
-        if "nicht erreichbar" in detail:
-            return f"{server} ist nicht erreichbar: Prüfe deine Internetverbindung"
-        return f"{server} antwortet unerwartet: Prüfe die Server-Adresse ({detail})"
+        if "nicht erreichbar" in detail:  # mcp.probe_unauthenticated
+            return f"{server} is not reachable: Check your internet connection"
+        return f"{server} answers unexpectedly: Check the server address ({detail})"
     if name.startswith("agent-"):
         return _agent_action(name[len("agent-"):], detail)
     return detail  # agents, identity-…: these details already name their way out
 
 
 def _agent_action(agent: str, detail: str) -> str:
-    """Goes by the first kind of finding, in the order agents.findings reports them."""
+    """Goes by the first kind of finding, in the order agents.findings reports them (its wording)."""
     if "Keychain-Eintrag fehlt" in detail or "an keinen Server gebunden" in detail:
-        return f"Agent {agent} ist nicht vollständig angebunden: Führe moshi-cockpit bot add {agent} aus"
+        return f"Agent {agent} is not fully connected to the servers: {detail}"
     if "Origin-Mismatch" in detail:
-        return f"Agent {agent} ist an einen anderen Server gebunden: Führe moshi-cockpit bot add {agent} --rebind aus, wenn der Umzug Absicht ist"
+        return f"Agent {agent} is bound to another server than the configured one: {detail}"
     if "nicht installiert" in detail:
-        return f"Agent {agent}: {detail}. Installiere die CLI"
+        return f"Agent {agent}: {detail}. Install the CLI"
     if "nicht 0600" in detail:
-        return f"Agent {agent}: {detail}. Setze die Datei mit chmod 600 zurück"
+        return f"Agent {agent}: {detail}. Reset the file with chmod 600"
     if "fehlt (moshi-cockpit install)" in detail or "weicht von dem ab" in detail:
-        return f"Die Einrichtung von Agent {agent} weicht ab: {INSTALL}"
+        return f"The setup of agent {agent} differs: {INSTALL}"
     return f"Agent {agent}: {detail}"
 
 
@@ -290,5 +265,5 @@ def render(results: List[Check], as_json: bool = False) -> str:
     lines = [f"{marks[r.status]} {r.name:<18} {r.detail}" for r in results]
     fails = sum(r.status == FAIL for r in results)
     warns = sum(r.status == WARN for r in results)
-    lines.append(f"\n{len(results)} Prüfungen · {fails} Fehler · {warns} Hinweise")
+    lines.append(f"\n{len(results)} checks · {fails} errors · {warns} warnings")
     return "\n".join(lines)

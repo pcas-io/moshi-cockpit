@@ -8,19 +8,19 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from cockpit.secrets import KeychainError, SecretStore
 from cockpit.mcp import McpClient
-from cockpit.paths import COCKPIT_IDENTITY, keychain_service
+from cockpit.paths import keychain_service
 from cockpit.text import clean
 from cockpit.tokens import moshi_token
 
 
 def pick_identity(keychain: SecretStore, requested: Optional[str], agent_names: Sequence[str] = ()) -> str:
-    """A dedicated 'cockpit' identity is preferred: every MCP call refreshes the caller's presence,
-    so reading with an agent's token would make that agent look online."""
-    candidates = [requested] if requested else [COCKPIT_IDENTITY, *agent_names]
+    """The requested agent, or the first one here with a moshi token. Every MCP call refreshes the caller's
+    presence, so the agent read through looks online (render says so)."""
+    candidates = [requested] if requested else list(agent_names)
     for agent in candidates:
         if agent and keychain.exists(keychain_service("moshi", agent), agent):
             return agent
-    raise KeychainError("Kein moshi-Token gefunden. Empfohlen: moshi-cockpit bot add cockpit")
+    raise KeychainError("No moshi token found on this Mac")
 
 
 def fetch_status(keychain: SecretStore, identity: str, url: str, paths,
@@ -61,14 +61,14 @@ def problems(paths) -> List[str]:
 
 def as_json(result: Dict, identity: str, local: Optional[List[Dict]] = None,
             servers: Optional[Dict[str, bool]] = None, harnesses: Optional[List[Dict]] = None,
-            problems: Optional[List[str]] = None, admin: bool = False, needs_connect: bool = False) -> str:
+            problems: Optional[List[str]] = None, needs_connect: bool = False) -> str:
     """Compact, sanitized view for the sidebar in herdr; no webhook or capability details. Without moshi
     `result` is empty and `identity` blank: the sidebar then shows the local agents without presence."""
     agents = [{f: clean(a.get(f), "") for f in FIELDS} for a in result.get("agents") or []]
     payload = {"identity": identity,
                "agents": agents, "local": list(local or []), "servers": dict(servers or {}),
                "harnesses": list(harnesses or []), "problems": list(problems or []),
-               "admin": bool(admin), "needs_connect": bool(needs_connect)}
+               "needs_connect": bool(needs_connect)}
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -76,15 +76,13 @@ def render(agents: List[Dict], identity: str) -> str:
     order = {"live": 0, "stale": 1, "offline": 2, "never": 3}
     rows = sorted(agents, key=lambda a: (order.get(a.get("presence") or "never", 9), clean(a.get("name"), "").lower()))
     marks = {"live": "●", "stale": "◐", "offline": "○", "never": "·"}
-    lines = [f"{'':2}{'Agent':<17}{'Rolle':<18}{'zuletzt':<18}working_on"]
+    lines = [f"{'':2}{'Agent':<17}{'Role':<18}{'Last seen':<18}working_on"]
     for agent in rows:
         presence = agent.get("presence") or "never"
         seen = clean(agent.get("last_seen_at"))[:16].replace("T", " ")
         lines.append(f"{marks.get(presence, '?'):<2}{clean(agent.get('name'), '?')[:16]:<17}"
                      f"{clean(agent.get('role'))[:17]:<18}{seen:<18}{clean(agent.get('working_on'))[:90]}")
     live = sum((a.get("presence") == "live") for a in agents)
-    lines.append(f"\n{len(agents)} Agents · {live} live · gelesen als '{identity}'")
-    if identity != COCKPIT_IDENTITY:
-        lines.append(f"Hinweis: Der Aufruf frischt die Präsenz von '{identity}' auf. "
-                     "Mit einer eigenen Identität: moshi-cockpit bot add cockpit")
+    lines.append(f"\n{len(agents)} agents · {live} live · read as '{identity}'")
+    lines.append(f"Note: reading refreshes the presence of '{identity}'.")
     return "\n".join(lines)

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import platform
 import re
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 # Tokens from ocellio and moshi are URL-safe. A strict charset keeps the
 # `security -i` command line injection-free without shell quoting tricks.
@@ -30,6 +30,18 @@ class SecretStore(Protocol):
     def write(self, service: str, account: str, secret: str, strict: bool = False) -> None: ...
 
     def delete(self, service: str, account: str) -> None: ...
+
+
+@runtime_checkable
+class HardenedStore(Protocol):
+    """Optional extras of a store that can harden entries (macOS: an empty trusted-app list). Callers check
+    `isinstance(store, HardenedStore)` before they use them; a plain SecretStore simply has none."""
+
+    def is_strict(self, service: str, account: str) -> bool: ...
+
+    def has_parked(self, service: str, account: str) -> bool: ...
+
+    def restore_parked(self, service: str, account: str) -> bool: ...
 
 
 def validate_token(secret: str) -> None:

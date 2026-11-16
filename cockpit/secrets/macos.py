@@ -14,6 +14,7 @@ from cockpit.secrets import KeychainError, validate_token
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
+
 def _run(runner: Runner, args: Sequence[str], stdin: str = "") -> "subprocess.CompletedProcess[str]":
     return runner(list(args), input=stdin, capture_output=True, text=True, check=False)
 
@@ -94,8 +95,8 @@ class MacKeychain:
 
     def _replace_from_parked(self, service: str, account: str, secret: str) -> None:
         parked = pending_service(service)
-        kept = (f"The token is not lost, it is stored hardened under '{parked}'. Running the command again "
-                "restores it (moshi-cockpit bot add … --strict-keychain)")
+        kept = (f"The token is not lost, it is stored hardened under '{parked}'. Storing the token again "
+                "replaces that backup")
         if self.exists(service, account):
             self.delete(service, account)
         for attempt in (1, 2):

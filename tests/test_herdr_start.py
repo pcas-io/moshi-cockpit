@@ -1,19 +1,19 @@
-"""The installer starts Herdr itself: one run, no second install. No real app is ever opened."""
+"""The installer uses the Herdr the person installed from herdr.dev and starts it itself: one run, no second
+install. No real app is ever opened."""
 
+import io
 import json
 import subprocess
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from cockpit import defaults, installer
-from cockpit.pins import load_pins
+from cockpit import cli, defaults, installer
+from tests.helpers import MAIN_LAYOUT as MAIN, herdr_app
 from tests.test_agents_doctor import context
 
-LAYOUT_SKIPPED = "Layout cockpit: übersprungen"
-MAIN = {"id": "root", "type": "row", "children": [
-    {"id": "sidebar", "type": "column", "children": [{"id": "agents", "content": {"mod": "agents"}}]},
-    {"id": "work", "type": "column", "children": [{"id": "main", "content": {"tab": "active"}}]}]}
+LAYOUT_SKIPPED = "Layout cockpit: übersprungen"  # defaults.py's own note (translated in a later change)
 
 
 class Clock:
@@ -64,12 +64,10 @@ class StartTest(unittest.TestCase):
         self.ctx, _ = context(self)
         self.clock = Clock()
         self.said = []
-        patcher = mock.patch.object(installer, "install_herdr", return_value=[])
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        herdr_app(self.ctx.paths, ran_before=False)
 
     def install(self, fake, **options):
-        return installer.run(self.ctx, load_pins(), installer.InstallOptions(**options), runner=fake,
+        return installer.run(self.ctx, installer.InstallOptions(**options), runner=fake,
                              say=self.said.append, sleep=self.clock.sleep, now=self.clock.now)
 
     def layout(self):
@@ -83,8 +81,8 @@ class StartTest(unittest.TestCase):
         self.assertEqual(len(fake.called("status")), 3)
         self.assertTrue(self.layout().is_file())
         self.assertEqual(fake.calls[-1][1:], ["do", "layout.switch", '{"name": "cockpit"}'])
-        self.assertEqual(notes[-1], "Herdr zeigt das Layout cockpit")
-        self.assertFalse(any("erneut" in n or "noch einmal" in n or n.startswith(LAYOUT_SKIPPED) for n in notes))
+        self.assertEqual(notes[-1], installer.LAYOUT_SHOWN)
+        self.assertFalse(any("again" in n or n.startswith(LAYOUT_SKIPPED) for n in notes))
         self.assertEqual(len(self.said), 1)  # the wait is announced, it never looks like a hang
 
     def test_telemetry_is_off_before_herdr_runs_for_the_first_time(self):
@@ -102,23 +100,32 @@ class StartTest(unittest.TestCase):
         self.assertTrue(self.layout().is_file())
         self.assertEqual(self.said, [])
 
-    def test_skip_herdr_never_opens_it(self):
-        fake = FakeHerdr(self.ctx.paths)
-        notes = self.install(fake, skip_herdr=True)
-        self.assertEqual(fake.calls, [])
-        self.assertTrue(any(n.startswith(LAYOUT_SKIPPED) for n in notes))
+    def test_install_refuses_without_herdr_app_and_names_herdr_dev(self):
+        ctx, _ = context(self)  # nothing in Applications
+        fake = FakeHerdr(ctx.paths)
+        with self.assertRaises(ValueError) as caught:
+            installer.run(ctx, installer.InstallOptions(), runner=fake, say=self.said.append,
+                          sleep=self.clock.sleep, now=self.clock.now)
+        self.assertEqual(str(caught.exception), "Install Herdr from https://herdr.dev first, then run this again.")
+        self.assertEqual(fake.calls, [])  # nothing downloaded, opened or asked
+        self.assertFalse(ctx.paths.herdr_settings.exists())
+        self.assertFalse((ctx.paths.local_bin / "moshi-cockpit").exists())
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.main(["install"]), 1)
+        self.assertIn("Install Herdr from https://herdr.dev first", err.getvalue())
 
     def test_a_timeout_ends_with_one_sentence_that_says_what_to_do(self):
         fake = FakeHerdr(self.ctx.paths, statuses=[result(1)] * 500)
         notes = self.install(fake)
         self.assertEqual(notes[-1], installer.HERDR_NOT_READY)
-        self.assertEqual(sum("Herdr" in n and "noch einmal" in n for n in notes), 1)
+        self.assertEqual(sum("Herdr" in n and "again" in n for n in notes), 1)
         self.assertFalse(any(n.startswith(LAYOUT_SKIPPED) for n in notes))
         self.assertGreaterEqual(self.clock.time, installer.START_TIMEOUT)
         self.assertLessEqual(self.clock.time, installer.START_TIMEOUT + installer.POLL_SECONDS)
         self.assertFalse(self.layout().exists())
         self.assertEqual(fake.called("do"), [])
-        self.assertTrue(any("Launcher" in n for n in notes))  # the rest of the setup is done
+        self.assertTrue(any("Launchers" in n for n in notes))  # the rest of the setup is done
 
     def test_it_waits_for_the_layout_before_asking_the_window(self):
         fake = FakeHerdr(self.ctx.paths, writes_layout=False)
@@ -138,7 +145,7 @@ class StartTest(unittest.TestCase):
         fake = FakeHerdr(self.ctx.paths, statuses=waiting)
         notes = self.install(fake)
         self.assertEqual(len(fake.called("status")), len(waiting) + 1)
-        self.assertEqual(notes[-1], "Herdr zeigt das Layout cockpit")
+        self.assertEqual(notes[-1], installer.LAYOUT_SHOWN)
 
     def test_a_failed_switch_names_the_key(self):
         fake = FakeHerdr(self.ctx.paths, switch=1)
@@ -166,7 +173,7 @@ class StartTest(unittest.TestCase):
 class CommandLineTest(unittest.TestCase):
     def run_cli(self, notes):
         from cockpit import cli
-        args = mock.Mock(skip_herdr=False, moshi=None, ocellio=None)
+        args = mock.Mock(moshi=None, ocellio=None)
         ctx, _ = context(self)
         with mock.patch.object(cli, "_context", return_value=ctx), mock.patch.object(cli.installer, "run", return_value=notes), \
                 mock.patch.object(cli.doctor, "run", return_value=[]), mock.patch("builtins.print") as printed:
@@ -177,10 +184,10 @@ class CommandLineTest(unittest.TestCase):
         code, text = self.run_cli(["x", installer.HERDR_NOT_READY])
         self.assertEqual(code, 0)
         self.assertIn(installer.HERDR_NOT_READY, text)
-        self.assertNotIn("Fertig", text)
+        self.assertNotIn("Done", text)
 
     def test_a_normal_run_ends_quietly(self):
-        self.assertIn("Fertig", self.run_cli(["x"])[1])
+        self.assertIn("Done", self.run_cli(["x"])[1])
 
 
 if __name__ == "__main__":

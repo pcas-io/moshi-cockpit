@@ -10,9 +10,6 @@ from typing import Mapping, Optional
 
 USER_AGENT = "moshi-cockpit/0.1"
 
-# The moshi identity of the human at the cockpit (reads the mesh for the sidebar). Reserved as an agent name.
-COCKPIT_IDENTITY = "cockpit"
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHARE = REPO_ROOT / "share"
 BIN = REPO_ROOT / "bin"
