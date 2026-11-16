@@ -10,10 +10,11 @@ test("names follow moshi's rule and the reserved list", () => {
   for (const bad of ["", "-x", "_x", "a b", "../x", "ä", "x".repeat(65), "--harness=claude"]) {
     assert.notEqual(checkName(bad, []), null, bad);
   }
-  for (const reserved of ["admin", "Broadcast", "COCKPIT", "register"]) {
-    assert.match(checkName(reserved, []), /reserviert/);
+  // device and default name the installation's own Keychain entries (moshi-device, ocellio-default)
+  for (const reserved of ["admin", "Broadcast", "COCKPIT", "register", "device", "Default"]) {
+    assert.match(checkName(reserved, []), /reserved/);
   }
-  assert.match(checkName("Codex", [{ name: "codex" }]), /schon/);
+  assert.match(checkName("Codex", [{ name: "codex" }]), /exists already/);
 });
 
 test("roles lose control characters and are bounded like registry._validate", () => {

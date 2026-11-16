@@ -11,9 +11,10 @@ from cockpit import agents as agent_files
 from cockpit import __version__, connect, doctor, installer, launch, registry, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.config import SERVERS, load_config, save_rules
+from cockpit.config import SERVERS, load_config, require, save_rules
 from cockpit.harnesses import Ctx
 from cockpit.mcp import McpError
+from cockpit.moshi_api import MoshiApi, MoshiError
 from cockpit.paths import Paths
 from cockpit.registry import load_agents
 from cockpit.secrets import KeychainError, default_store
@@ -47,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     stat.add_argument("--as", dest="identity", help="agent whose moshi token reads the mesh (default: the first one here)")
     stat.add_argument("--json", action="store_true", help="compact JSON (for the sidebar in Herdr)")
 
-    sub.add_parser("connect", help="connect this Mac to moshi and ocellio (tokens are asked for hidden)")
+    sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
 
     agt = sub.add_parser("agent", help="manage agents (name, harness, role)")
     agt_sub = agt.add_subparsers(dest="agent_command", required=True)
@@ -155,17 +156,12 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
 
 def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
     """Runs in a tab of its own, which closes with the process: the outcome stays readable until Enter."""
-    code = 0
-    ctx = _context(paths)
+    code = 1
     try:
-        for note in connect.run(ctx):
-            print(f"• {note}")
-        print(f"\n{connect.DONE}")
-    except (KeychainError, McpError, ValueError, OSError) as exc:  # OSError: network
+        ctx = _context(paths)
+        code = connect.run(ctx, connect.ConnectIO(), MoshiApi(require(load_config(paths), "moshi")))
+    except (KeychainError, MoshiError, ValueError, OSError) as exc:  # OSError: network, browser
         print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
-        if connect.worth_retrying(ctx):
-            print(connect.KEPT, file=sys.stderr)
-        code = 1
     if sys.stdin.isatty():
         try:
             input("\nEnter closes this tab. ")

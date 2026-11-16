@@ -1,132 +1,266 @@
-"""`moshi-cockpit connect`, the first sign-in of a Mac. Fake keychain, no network."""
+"""`moshi-cockpit connect`: one browser approval against FakeMoshi. Fake keychain, no real browser, no waiting."""
 
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
-from cockpit import cli, connect, status, tokens
+from cockpit import cli, connect, registry, status, tokens
 from cockpit.config import load_config, origin, save_servers
-from cockpit.secrets import KeychainError
+from cockpit.moshi_api import MoshiApi, MoshiError, parse_timestamp
 from cockpit.paths import keychain_service
 from cockpit.registry import Agent, save_agents
+from cockpit.secrets import KeychainError
+from tests.fake_moshi import serve
 from tests.helpers import MOSHI, OCELLIO, configure
 from tests.test_agents_doctor import context
 
-RT = "rt_" + "a" * 26 + "_" + "b" * 43
 OCELLIO_TOKEN = "ocellio-token-1234"
+DEVICE_ENTRY = ("moshi-device", "device")
 REGISTER_ENTRY = ("moshi-register", "register")
 OCELLIO_ENTRY = ("ocellio-default", "default")
+RT = "rt_" + "a" * 26 + "_" + "b" * 43
+
+
+class Flaky:
+    """MoshiApi whose device_token fails `failures` times as if the network were down, then answers."""
+
+    def __init__(self, api, failures):
+        self.api, self.failures = api, failures
+
+    def device_authorize(self, *args, **kwargs):
+        return self.api.device_authorize(*args, **kwargs)
+
+    def device_token(self, device_code):
+        if self.failures:
+            self.failures -= 1
+            raise MoshiError("unreachable", 0)
+        return self.api.device_token(device_code)
 
 
 class ConnectTest(unittest.TestCase):
     def setUp(self):
         self.ctx, self.fake = context(self)
         configure(self.ctx.paths)
-        self.said = []
+        self.moshi = serve(self)
+        self.api = MoshiApi(self.moshi.url)
+        self.said, self.prompts, self.opened, self.slept = [], [], [], []
+        self.answers = [OCELLIO_TOKEN]
+        self.decision = self.moshi.approve  # what the person does in the browser
 
-    def answers(self, *values):
-        queue = list(values)
-        self.prompts = []
+    def ask(self, prompt):
+        self.prompts.append(prompt)
+        return self.answers.pop(0)
 
-        def ask(prompt):
-            self.prompts.append(prompt)
-            return queue.pop(0)
-        return connect.ConnectIO(ask_secret=ask, say=self.said.append)
+    def browser(self, url):
+        self.opened.append(url)
+        self.decision(parse_qs(urlsplit(url).query)["code"][0])
+        return True
 
-    def run_connect(self, *values):
-        return connect.run(self.ctx, self.answers(*values))
+    def run_connect(self, api=None, browser=None, sleep=None):
+        io = connect.ConnectIO(ask_secret=self.ask, say=self.said.append)
+        return connect.run(self.ctx, io, api or self.api, opener=browser or self.browser,
+                           sleep=sleep or self.slept.append, label="test-mac")
 
-    def exists(self, service, account):
-        return self.ctx.keychain.exists(service, account)
+    def entry(self, key):
+        return self.fake.entries.get(key)
 
-    def test_it_says_what_it_needs_and_asks_hidden_one_after_the_other(self):
-        self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertIn("two tokens", self.said[0])
-        self.assertIn("ocellio account", self.said[0])
-        self.assertEqual(len(self.prompts), 2)
-        self.assertIn("registration token", self.prompts[0])
-        self.assertIn("ocellio token", self.prompts[1])
-        self.assertTrue(all("hidden" in p for p in self.prompts))
+    def live_registration(self):
+        return [t for t, e in self.moshi.registration_tokens.items() if not e["revoked"]]
 
-    def test_tokens_land_in_the_keychain_bound_to_their_servers(self):
-        self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertEqual(self.fake.entries[REGISTER_ENTRY], RT)
-        self.assertTrue(self.ctx.keychain.is_strict(*REGISTER_ENTRY))  # macOS asks on every read
-        self.assertEqual(self.fake.entries[OCELLIO_ENTRY], OCELLIO_TOKEN)
-        self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.REGISTER), origin(MOSHI))
-        self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.OCELLIO_DEFAULT), origin(OCELLIO))
-        self.assertFalse(self.fake.argv_contains(RT) or self.fake.argv_contains(OCELLIO_TOKEN))
+    def expire_locally(self):
+        data = json.loads(self.ctx.paths.mesh_config.read_text())
+        data[connect.EXPIRES_KEY] = "2020-01-01T00:00:00.000Z"
+        self.ctx.paths.mesh_config.write_text(json.dumps(data))
 
-    def test_no_token_is_ever_shown(self):
-        notes = self.run_connect(RT, OCELLIO_TOKEN)
-        text = " ".join(self.said + notes + self.prompts)
-        self.assertNotIn(RT, text)
-        self.assertNotIn(OCELLIO_TOKEN, text)
+    def text(self):
+        return "\n".join(self.said + self.prompts)
 
-    def test_it_creates_no_moshi_identity_of_its_own(self):
-        self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertEqual(set(self.fake.entries), {REGISTER_ENTRY, OCELLIO_ENTRY})
-        self.assertNotIn("cockpit", json.loads(self.ctx.paths.mesh_config.read_text())["bound"])
+    def test_connect_stores_device_key_and_registration_token_after_approval(self):
+        self.assertEqual(self.run_connect(), 0)
+        installation = next(iter(self.moshi.installations.values()))
+        self.assertEqual(self.entry(DEVICE_ENTRY), installation["device_key"])
+        self.assertEqual([self.entry(REGISTER_ENTRY)], self.live_registration())
+        self.assertTrue(self.ctx.keychain.is_strict(*REGISTER_ENTRY))   # macOS asks on every read
+        self.assertFalse(self.ctx.keychain.is_strict(*DEVICE_ENTRY))   # the sidebar reads it without asking
+        expires = self.moshi.registration_tokens[self.entry(REGISTER_ENTRY)]["expires_at"]
+        saved = json.loads(self.ctx.paths.mesh_config.read_text())[connect.EXPIRES_KEY]
+        self.assertEqual(parse_timestamp(saved), expires.replace(microsecond=expires.microsecond // 1000 * 1000))
+        for identity in (tokens.DEVICE, tokens.REGISTER):
+            self.assertEqual(tokens.bound_origin(self.ctx.paths, identity), origin(MOSHI))
 
-    def test_an_agent_token_is_refused_and_asked_again(self):
-        self.run_connect("agent-token-12345", RT, OCELLIO_TOKEN)
-        self.assertEqual(len(self.prompts), 3)
-        self.assertTrue(any("not a registration token" in s for s in self.said))
+    def test_connect_says_each_step(self):
+        self.run_connect()
+        start = self.moshi.calls("POST", "/api/device/authorize")[0]
+        self.assertEqual(start["body"], {"label": "Herdr on test-mac"})
+        self.assertIsNone(start["auth"])
+        code = next(iter(self.moshi.flows.values()))["user_code"]
+        shown = f"{code[:4]}-{code[4:]}"
+        self.assertEqual(self.said[:2], [
+            "Connecting this Herdr to moshi.",
+            f"Confirm in your browser. If it opens on another device, go to {self.moshi.origin}/link and enter {shown}."])
+        self.assertEqual(self.opened, [f"{self.moshi.origin}/link?code={shown}"])
+        self.assertIn('Connected as "Herdr on test-mac".', self.said)
+        self.assertEqual(self.said[-1], connect.DONE)
+        self.assertEqual(self.slept, [5])  # moshi's interval before the first poll
 
-    def test_it_gives_up_after_three_wrong_tokens(self):
-        with self.assertRaises(ValueError):
-            self.run_connect(*["agent-token-12345"] * 3)
-        self.assertFalse(self.exists(*REGISTER_ENTRY))
+    def test_no_token_is_ever_shown_or_put_into_argv(self):
+        self.run_connect()
+        secrets = [self.entry(DEVICE_ENTRY), self.entry(REGISTER_ENTRY), OCELLIO_TOKEN]
+        for secret in secrets:
+            self.assertNotIn(secret, self.text())
+            self.assertFalse(self.fake.argv_contains(secret))
 
-    def test_three_wrong_tokens_are_three_questions_not_nine(self):
-        with self.assertRaises(ValueError):
-            self.run_connect(*["x"] * 9)
-        self.assertEqual(len(self.prompts), 3)
-
-    def test_a_token_for_another_moshi_is_never_stored(self):
-        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.REGISTER, "https://other.example/mcp")
-        with self.assertRaises(ValueError):
-            self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertFalse(self.exists(*REGISTER_ENTRY))
-
-    def test_a_token_for_another_ocellio_is_never_stored(self):
-        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.OCELLIO_DEFAULT, "https://other.example/mcp/")
-        with self.assertRaises(ValueError):
-            self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertFalse(self.exists(*OCELLIO_ENTRY))
-
-    def test_what_is_stored_is_said_before_a_later_failure(self):
-        with self.assertRaises(ValueError):
-            self.run_connect(RT, "x", "x", "x")
-        self.assertTrue(any("moshi-register" in s for s in self.said))
-
-    def test_an_interrupted_run_only_asks_for_what_is_missing(self):
-        with self.assertRaises(ValueError):
-            self.run_connect(RT, "x", "x", "x")
+    def test_connect_with_an_expired_registration_token_renews_it_and_keeps_the_device_key(self):
+        self.run_connect()
+        installation_id = next(iter(self.moshi.installations))
+        agent_token = self.moshi.add_agent("research", installation_id=installation_id)
+        device_key, old_rt = self.entry(DEVICE_ENTRY), self.entry(REGISTER_ENTRY)
+        self.expire_locally()
         self.said.clear()
-        self.run_connect(OCELLIO_TOKEN)
-        self.assertEqual(len(self.prompts), 1)
-        self.assertIn("ocellio", self.prompts[0])
-        self.assertIn("still", self.said[0])
+        self.assertEqual(self.run_connect(), 0)
+        renewal = self.moshi.calls("POST", "/api/device/authorize")[-1]
+        self.assertEqual(renewal["auth"], f"Bearer {device_key}")
+        self.assertEqual(len(self.moshi.installations), 1)
+        self.assertEqual(self.entry(DEVICE_ENTRY), device_key)
+        self.assertNotEqual(self.entry(REGISTER_ENTRY), old_rt)
+        self.assertEqual([self.entry(REGISTER_ENTRY)], self.live_registration())
+        self.assertTrue(self.ctx.keychain.is_strict(*REGISTER_ENTRY))
+        self.assertFalse(self.moshi.agent_tokens[agent_token]["revoked"])
+        self.assertTrue(connect.approval_valid(self.ctx.paths, self.ctx.keychain, datetime.now(timezone.utc)))
+        self.assertIn('Connected as "Herdr on test-mac".', self.said)
 
-    def test_nothing_is_asked_when_everything_is_there(self):
-        self.run_connect(RT, OCELLIO_TOKEN)
-        self.said.clear()
-        notes = self.run_connect()
+    def test_a_revoked_device_key_connects_anew(self):
+        self.run_connect()
+        old_key = self.entry(DEVICE_ENTRY)
+        self.moshi.revoke_installation(next(iter(self.moshi.installations)))
+        self.assertEqual(self.run_connect(), 0)
+        self.assertEqual(len(self.moshi.installations), 2)
+        self.assertNotEqual(self.entry(DEVICE_ENTRY), old_key)
+        self.assertEqual(self.moshi.live_installation(self.entry(DEVICE_ENTRY))["label"], "Herdr on test-mac")
+        self.assertEqual([self.entry(REGISTER_ENTRY)], self.live_registration())
+
+    def test_connect_honours_slow_down(self):
+        self.decision = lambda code: None
+        self.moshi.slow_down = 2
+
+        def sleep(seconds):
+            self.slept.append(seconds)
+            if len(self.slept) == 3:
+                self.moshi.approve(next(iter(self.moshi.flows.values()))["user_code"])
+        self.assertEqual(self.run_connect(sleep=sleep), 0)
+        self.assertEqual(self.slept, [5, 10, 15])
+        self.assertIsNotNone(self.entry(REGISTER_ENTRY))
+
+    def test_connect_stops_waiting_at_expires_in(self):
+        self.decision = lambda code: None
+        self.assertEqual(self.run_connect(), 1)
+        self.assertEqual(sum(self.slept), 600)
+        self.assertEqual(len(self.moshi.calls("POST", "/api/device/token")), 120)
+        self.assertEqual(self.said[-1], "The code expired. Run connect again.")
+
+    def test_connect_reports_an_expired_code(self):
+        self.decision = self.moshi.expire
+        self.assertEqual(self.run_connect(), 1)
+        self.assertEqual(self.said[-1], "The code expired. Run connect again.")
+        self.assertEqual(self.fake.entries, {})
         self.assertEqual(self.prompts, [])
-        self.assertEqual(self.said, [])
-        self.assertIn("nothing to do", notes[0])
 
-    def test_without_ocellio_only_moshi_is_asked(self):
-        save_servers(self.ctx.paths, self.ctx.backup, {"ocellio": ""})
-        self.run_connect(RT)
+    def test_connect_reports_a_denied_request(self):
+        self.decision = self.moshi.deny
+        self.assertEqual(self.run_connect(), 1)
+        self.assertEqual(self.said[-1], "Connection was denied in moshi.")
+        self.assertEqual(self.fake.entries, {})
+
+    def test_a_network_failure_while_polling_is_retried_with_the_same_interval(self):
+        self.assertEqual(self.run_connect(api=Flaky(self.api, 3)), 0)
+        self.assertEqual(self.slept, [5, 5, 5, 5])
+        self.assertIsNotNone(self.entry(REGISTER_ENTRY))
+
+    def test_a_network_failure_until_the_expiry_ends_with_one_clear_line(self):
+        self.assertEqual(self.run_connect(api=Flaky(self.api, 10 ** 6)), 1)
+        self.assertEqual(sum(self.slept), 600)
+        self.assertEqual(self.said[-1], connect.LOST)
+        self.assertEqual(self.fake.entries, {})
+
+    def test_moshi_unreachable_at_the_start_is_one_clear_line(self):
+        self.assertEqual(self.run_connect(api=MoshiApi("http://127.0.0.1:1", timeout=2)), 1)
+        self.assertEqual(self.said[-1], connect.UNREACHABLE.format(origin=origin(MOSHI)))
+        self.assertEqual(self.opened, [])
+
+    def test_connect_asks_for_the_ocellio_token_only_once(self):
+        self.assertEqual(self.run_connect(), 0)
+        self.assertEqual(self.prompts, ["Your ocellio token (input hidden, stays in the Keychain): "])
+        self.assertEqual(self.entry(OCELLIO_ENTRY), OCELLIO_TOKEN)
+        self.assertFalse(self.ctx.keychain.is_strict(*OCELLIO_ENTRY))
+        self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.OCELLIO_DEFAULT), origin(OCELLIO))
+        self.expire_locally()
+        self.assertEqual(self.run_connect(), 0)
         self.assertEqual(len(self.prompts), 1)
-        self.assertNotIn("ocellio", self.said[0])
+
+    def test_a_wrong_ocellio_token_is_not_asked_again_and_not_stored(self):
+        self.answers = ["not a token"]
+        self.assertEqual(self.run_connect(), 1)
+        self.assertEqual(len(self.prompts), 1)
+        self.assertNotIn(OCELLIO_ENTRY, self.fake.entries)
+        self.assertIsNotNone(self.entry(REGISTER_ENTRY))  # what moshi granted stays
+        self.assertEqual(self.said[-1], connect.NO_OCELLIO)
+
+    def test_without_ocellio_nothing_is_asked(self):
+        save_servers(self.ctx.paths, self.ctx.backup, {"ocellio": ""})
+        self.assertEqual(self.run_connect(), 0)
+        self.assertEqual(self.prompts, [])
 
     def test_without_moshi_it_stops_with_a_sentence(self):
         save_servers(self.ctx.paths, self.ctx.backup, {"moshi": ""})
         with self.assertRaises(ValueError):
-            connect.run(self.ctx, self.answers())
+            self.run_connect()
+        self.assertEqual(self.moshi.requests, [])
+
+    def test_a_herdr_connected_to_another_moshi_sends_nothing(self):
+        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.DEVICE, "https://other.example/mcp")
+        with self.assertRaises(ValueError):
+            self.run_connect()
+        self.assertEqual(self.moshi.requests, [])
+        self.assertEqual(self.fake.entries, {})
+
+    def test_the_label_defaults_to_the_host_name(self):
+        io = connect.ConnectIO(ask_secret=self.ask, say=self.said.append)
+        with mock.patch.object(connect.socket, "gethostname", return_value="studio"):
+            connect.run(self.ctx, io, self.api, opener=self.browser, sleep=self.slept.append)
+        self.assertEqual(self.moshi.calls("POST", "/api/device/authorize")[0]["body"], {"label": "Herdr on studio"})
+
+    def test_text_from_moshi_reaches_the_terminal_without_control_characters(self):
+        self.run_connect()
+        installation = next(iter(self.moshi.installations.values()))
+        installation["label"] = "x\x1b]0;evil\x07"
+        self.expire_locally()
+        self.said.clear()
+        self.run_connect()
+        self.assertFalse(any("\x1b" in line or "\x07" in line for line in self.said))
+
+
+class OpenBrowserTest(unittest.TestCase):
+    def test_macos_opens_the_url_as_one_argument(self):
+        with mock.patch.object(connect.platform, "system", return_value="Darwin"), \
+                mock.patch.object(connect.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            self.assertTrue(connect.open_browser("https://moshi.example.test/link?code=BCDF-GHJK"))
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/open", "https://moshi.example.test/link?code=BCDF-GHJK"])
+
+    def test_elsewhere_the_standard_browser_module_opens_it(self):
+        with mock.patch.object(connect.platform, "system", return_value="Linux"), \
+                mock.patch.object(connect.webbrowser, "open", return_value=True) as opened:
+            self.assertTrue(connect.open_browser("https://moshi.example.test/link"))
+        opened.assert_called_once_with("https://moshi.example.test/link")
+
+    def test_only_https_is_ever_opened(self):
+        with mock.patch.object(connect.subprocess, "run") as run, mock.patch.object(connect.webbrowser, "open") as web:
+            for url in ("file:///Applications/Calculator.app", "-a Terminal", "http://moshi.example.test/link"):
+                self.assertFalse(connect.open_browser(url))
+        run.assert_not_called()
+        web.assert_not_called()
 
 
 class NeedsConnectTest(unittest.TestCase):
@@ -136,29 +270,70 @@ class NeedsConnectTest(unittest.TestCase):
     def needs(self):
         return connect.needs_connect(self.ctx.paths, load_config(self.ctx.paths), self.ctx.keychain)
 
-    def test_a_new_mac_with_moshi_needs_it(self):
+    def test_a_new_herdr_with_moshi_needs_it(self):
         configure(self.ctx.paths)
         self.assertTrue(self.needs())
 
     def test_without_moshi_the_cockpit_stays_local_and_silent(self):
         self.assertFalse(self.needs())
 
-    def test_a_former_cockpit_identity_does_not_count(self):
+    def test_needs_connect_is_false_once_a_device_key_exists(self):
         configure(self.ctx.paths)
-        self.ctx.keychain.write(keychain_service("moshi", "cockpit"), "cockpit", "moshi-token-1234")
-        self.assertTrue(self.needs())
+        self.ctx.keychain.write(*DEVICE_ENTRY, "dk_device-key-1234")
+        self.assertFalse(self.needs())
 
-    def test_an_existing_agent_identity_ends_it(self):
+    def test_agent_tokens_or_a_registration_token_alone_do_not_end_it(self):
         configure(self.ctx.paths)
         save_agents(self.ctx.paths, self.ctx.backup, [Agent(name="research", harness="codex")])
-        self.assertTrue(self.needs())
         self.ctx.keychain.write(keychain_service("moshi", "research"), "research", "moshi-token-1234")
-        self.assertFalse(self.needs())
-
-    def test_a_stored_registration_token_ends_it(self):
-        configure(self.ctx.paths)
         self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
-        self.assertFalse(self.needs())
+        self.assertTrue(self.needs())
+
+
+class ApprovalValidTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.fake = context(self)
+        configure(self.ctx.paths)
+        self.now = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+
+    def expires(self, value):
+        data = json.loads(self.ctx.paths.mesh_config.read_text())
+        data[connect.EXPIRES_KEY] = value
+        self.ctx.paths.mesh_config.write_text(json.dumps(data))
+
+    def valid(self, now=None):
+        return connect.approval_valid(self.ctx.paths, self.ctx.keychain, now or self.now)
+
+    def test_approval_valid_is_false_after_register_expires_at(self):
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
+        self.expires("2026-11-16T12:00:00.000Z")
+        self.assertTrue(self.valid(self.now - timedelta(seconds=1)))
+        self.assertFalse(self.valid(self.now))
+        self.assertFalse(self.valid(self.now + timedelta(hours=1)))
+
+    def test_an_offset_is_compared_as_the_same_moment(self):
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
+        self.expires("2026-11-16T13:30:00+01:00")  # 12:30 UTC
+        self.assertTrue(self.valid(datetime(2026, 11, 16, 12, 29, tzinfo=timezone.utc)))
+        self.assertFalse(self.valid(datetime(2026, 11, 16, 12, 31, tzinfo=timezone.utc)))
+
+    def test_without_a_registration_token_it_is_false(self):
+        self.expires("2099-01-01T00:00:00Z")
+        self.assertFalse(self.valid())
+
+    def test_a_missing_or_broken_expiry_is_false(self):
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
+        self.assertFalse(self.valid())
+        for broken in ("tomorrow", 12, None, ""):
+            self.expires(broken)
+            self.assertFalse(self.valid(), broken)
+
+
+class ReservedNamesTest(unittest.TestCase):
+    def test_device_and_default_are_reserved_like_their_keychain_entries(self):
+        for name in ("device", "Default", "register", "cockpit"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                registry.validate_name(name)
 
 
 class CommandLineTest(unittest.TestCase):
@@ -172,7 +347,7 @@ class CommandLineTest(unittest.TestCase):
             code = cli.cmd_status(args, self.ctx.paths)
         return code, json.loads(printed.call_args.args[0])
 
-    def test_the_panel_gets_data_not_an_error_on_a_new_mac(self):
+    def test_the_panel_gets_data_not_an_error_on_a_new_herdr(self):
         code, data = self.status()
         self.assertEqual(code, 0)
         self.assertIs(data["needs_connect"], True)
@@ -180,7 +355,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(data["agents"], [])
 
     def test_after_connect_without_agents_the_panel_gets_the_local_view(self):
-        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)  # what a successful connect leaves
+        self.ctx.keychain.write(*DEVICE_ENTRY, "dk_device-key-1234")  # what a successful connect leaves
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
         code, data = self.status()
         self.assertEqual(code, 0)
         self.assertIs(data["needs_connect"], False)
@@ -191,46 +367,52 @@ class CommandLineTest(unittest.TestCase):
     def test_the_payload_defaults_to_connected(self):
         self.assertIs(json.loads(status.as_json({}, "x"))["needs_connect"], False)
 
-    def run_connect(self, result=None, error=None, tty=False):
-        run = mock.Mock(return_value=result or ["ok"], side_effect=error)
+    def run_connect(self, result=0, error=None, tty=False):
+        run = mock.Mock(return_value=result, side_effect=error)
         with mock.patch.object(cli.connect, "run", run), mock.patch.object(cli, "_context", return_value=self.ctx), \
                 mock.patch("builtins.print") as printed, mock.patch("sys.stdin.isatty", return_value=tty), \
                 mock.patch("builtins.input") as held:
             code = cli.cmd_connect(mock.Mock(), self.ctx.paths)
-        return code, " ".join(str(c.args[0]) for c in printed.call_args_list), held
+        return code, " ".join(str(c.args[0]) for c in printed.call_args_list), held, run
 
-    def test_success_points_back_to_herdr(self):
-        code, text, _ = self.run_connect()
+    def test_it_talks_to_the_configured_moshi(self):
+        code, _, _, run = self.run_connect()
         self.assertEqual(code, 0)
-        self.assertIn("+ Agent", text)
+        api = run.call_args.args[2]
+        self.assertIsInstance(api, MoshiApi)
+        self.assertEqual(api._base, origin(MOSHI))
 
-    def test_a_failure_stays_readable_until_enter(self):
-        code, text, held = self.run_connect(error=ValueError("Name taken"), tty=True)
-        self.assertEqual(code, 1)
-        self.assertIn("Name taken", text)
+    def test_the_outcome_is_the_exit_code(self):
+        self.assertEqual(self.run_connect(result=1)[0], 1)
+
+    def test_the_outcome_stays_readable_until_enter(self):
+        _, _, held, _ = self.run_connect(tty=True)
         held.assert_called_once()
 
-    def test_a_network_error_is_a_plain_failure(self):
-        code, text, _ = self.run_connect(error=OSError("network down"))
+    def test_a_failure_is_one_line_and_waits_too(self):
+        for error in (ValueError("Name taken"), MoshiError("too_many_requests", 429), KeychainError("locked"),
+                      OSError("network down")):
+            code, text, held, _ = self.run_connect(error=error, tty=True)
+            self.assertEqual(code, 1)
+            self.assertIn(str(error), text)
+            held.assert_called_once()
+
+    def test_without_moshi_it_says_so(self):
+        save_servers(self.ctx.paths, self.ctx.backup, {"moshi": ""})
+        code, text, _, run = self.run_connect()
         self.assertEqual(code, 1)
-        self.assertIn("network down", text)
+        self.assertIn("moshi", text)
+        run.assert_not_called()
 
-    def test_a_failure_says_that_stored_tokens_stay(self):
-        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
-        self.assertIn(connect.KEPT, self.run_connect(error=ValueError("x"))[1])
-
-    def test_with_nothing_stored_it_promises_nothing(self):
-        self.assertNotIn(connect.KEPT, self.run_connect(error=ValueError("x"))[1])
+    def test_without_a_terminal_nothing_waits(self):
+        _, _, held, _ = self.run_connect()
+        held.assert_not_called()
 
     def test_the_text_status_still_names_the_missing_token(self):
         args = mock.Mock(identity=None, json=False)
         with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), self.assertRaises(KeychainError) as caught:
             cli.cmd_status(args, self.ctx.paths)
         self.assertIn("moshi token", str(caught.exception))
-
-    def test_without_a_terminal_nothing_waits(self):
-        _, _, held = self.run_connect()
-        held.assert_not_called()
 
 
 if __name__ == "__main__":

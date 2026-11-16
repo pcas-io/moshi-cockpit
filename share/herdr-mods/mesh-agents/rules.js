@@ -4,14 +4,14 @@
 
 // moshi's agent name rule (fullmatch) and the names moshi-cockpit reserves (registry.NAME_RE, RESERVED).
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-export const RESERVED = new Set(["admin", "broadcast", "cockpit", "register"]);
+export const RESERVED = new Set(["admin", "broadcast", "cockpit", "default", "device", "register"]);
 export const MAX_ROLE = 120;
 
 export function checkName(raw, local) {
   const name = String(raw ?? "");
-  if (!NAME_RE.test(name)) return "Name: Buchstaben, Ziffern, _ und -, am Anfang Buchstabe oder Ziffer";
-  if (RESERVED.has(name.toLowerCase())) return `'${name}' ist reserviert`;
-  if ((local ?? []).some((a) => a.name.toLowerCase() === name.toLowerCase())) return `Es gibt schon '${name}'`;
+  if (!NAME_RE.test(name)) return "Name: letters, digits, _ and -, starting with a letter or digit";
+  if (RESERVED.has(name.toLowerCase())) return `'${name}' is reserved`;
+  if ((local ?? []).some((a) => a.name.toLowerCase() === name.toLowerCase())) return `'${name}' exists already`;
   return null;
 }
 
@@ -30,13 +30,13 @@ export const addArgs = (name, harness, role, connect = false, skill = "") =>
    ...(connect ? ["--connect"] : [])];
 
 export const setArgs = (name, role, skill) => {
-  if (!NAME_RE.test(String(name ?? ""))) throw new Error("ungültiger Agent-Name");
+  if (!NAME_RE.test(String(name ?? ""))) throw new Error("invalid agent name");
   return ["agent", "set", name, `--role=${role}`, `--skill=${skill}`];
 };
 
 // Only a name that passes the rule is ever sent (it cannot start with "-"). The panel asks first, so the
 // moshi decision is always explicit: revoke (admin access there) or keep.
 export const removeArgs = (name, revoke = false) => {
-  if (!NAME_RE.test(String(name ?? ""))) throw new Error("ungültiger Agent-Name");
+  if (!NAME_RE.test(String(name ?? ""))) throw new Error("invalid agent name");
   return ["agent", "remove", name, revoke ? "--revoke-moshi" : "--keep-moshi"];
 };
