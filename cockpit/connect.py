@@ -15,9 +15,8 @@ from typing import Callable, List, Tuple
 from cockpit import admin, bots, register
 from cockpit.agents import AgentContext
 from cockpit.config import load_config, origin, require
-from cockpit.keychain import Keychain, KeychainError
+from cockpit.secrets import KeychainError, SecretStore
 from cockpit.paths import COCKPIT_IDENTITY, Paths, keychain_service
-from cockpit.person import identity
 from cockpit.registry import load_agents
 from cockpit.tokens import COCKPIT_OCELLIO, REGISTER, bind_identity, bound_origin
 
@@ -31,7 +30,7 @@ class ConnectIO:
     say: Callable[[str], None] = print
 
 
-def needs_connect(paths: Paths, config, keychain: Keychain) -> bool:
+def needs_connect(paths: Paths, config, keychain: SecretStore) -> bool:
     """moshi is set up, but no identity on this Mac can read it yet."""
     if not config.has("moshi"):
         return False
@@ -61,8 +60,7 @@ def _intro(moshi: bool, ocellio: bool) -> str:
 def taken_message(name: str) -> str:
     return (f"Die Identität '{name}' gibt es in moshi schon, vermutlich von einem anderen Mac. Setz ihr Token nicht "
             "zurück, das würde den anderen Mac trennen. Hol dir vom Admin ein Registrier-Token für einen eigenen "
-            "Personen-Namen, dann: moshi-cockpit bot register-token remove, moshi-cockpit install --person <name> "
-            "und noch einmal verbinden.")
+            "Namen, dann: moshi-cockpit bot register-token remove und noch einmal verbinden.")
 
 
 def worth_retrying(ctx: AgentContext, exc: Exception) -> bool:
@@ -107,4 +105,4 @@ def run(ctx: AgentContext, io: ConnectIO = ConnectIO()) -> List[str]:
         if exc.reason != "name_taken":
             raise
         # moshi's general advice is to reset the token: for this name that would cut off the other Mac.
-        raise admin.AdminError(taken_message(identity(COCKPIT_IDENTITY, config.person)), exc.reason, exc.status) from None
+        raise admin.AdminError(taken_message(COCKPIT_IDENTITY), exc.reason, exc.status) from None

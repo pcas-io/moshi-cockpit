@@ -7,7 +7,7 @@ read only on an explicit action. A refused registration token is an error, never
 back to the admin token.
 
 Issuing one needs the admin token and happens on an admin machine: always with the prefix
-`<person>-` and an expiry. Its plaintext goes to the clipboard through stdin, never to stdout or argv.
+`<name>-` and an expiry. Its plaintext goes to the clipboard through stdin, never to stdout or argv.
 """
 
 from __future__ import annotations
@@ -22,8 +22,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from cockpit.admin import NAME_TAKEN, AdminApi, AdminError, Opener, request_json
 from cockpit.config import moshi_base
-from cockpit.keychain import Keychain, KeychainError
-from cockpit.person import validate_person
+from cockpit.secrets import KeychainError, SecretStore
 from cockpit.text import clean
 
 REGISTER_SERVICE = "moshi-register"
@@ -41,16 +40,16 @@ def validate_register_token(token: str) -> None:
         raise KeychainError("Das ist kein Registrier-Token (Format rt_…). Agent- und Admin-Tokens gehören nicht hierher")
 
 
-def has_register_token(keychain: Keychain) -> bool:
+def has_register_token(keychain: SecretStore) -> bool:
     return keychain.exists(REGISTER_SERVICE, REGISTER_ACCOUNT)
 
 
-def store_register_token(keychain: Keychain, token: str) -> None:
+def store_register_token(keychain: SecretStore, token: str) -> None:
     validate_register_token(token)
     keychain.write(REGISTER_SERVICE, REGISTER_ACCOUNT, token, strict=True)  # always with a dialog
 
 
-def forget_register_token(keychain: Keychain, paths, backup) -> List[str]:
+def forget_register_token(keychain: SecretStore, paths, backup) -> List[str]:
     """Removes the local registration token and its binding. Needed after a revoke: while one is stored,
     `bot add` uses nothing else (no fallback), so a dead one would block every later `bot add`."""
     from cockpit.tokens import REGISTER, unbind_identity
@@ -73,7 +72,7 @@ class RegisterApi:
         self._base = base or moshi_base(moshi_url) + "/api/register"
 
     @classmethod
-    def from_keychain(cls, keychain: Keychain, moshi_url: str, paths,
+    def from_keychain(cls, keychain: SecretStore, moshi_url: str, paths,
                       opener: Opener = urllib.request.urlopen) -> "RegisterApi":
         """The registration token only for the origin it was stored for (bot register-token set binds it)."""
         from cockpit.tokens import REGISTER, moshi_token
@@ -107,10 +106,17 @@ def _explain(exc: urllib.error.HTTPError, reason: str, message: str) -> str:
 # --- Issuing (admin machine) ---
 
 
+# moshi's own rule for agent names; the prefix leaves room for "-<agent>".
+_PREFIX_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
+
+
 def prefix_for(person: str) -> str:
-    prefix = f"{validate_person(person)}-"
+    name = (person or "").strip().lower()
+    if not _PREFIX_RE.fullmatch(name):
+        raise ValueError("Invalid name for a registration token prefix (a-z, 0-9, _ and -, at most 41 characters)")
+    prefix = f"{name}-"
     if len(prefix) > MAX_PREFIX:
-        raise ValueError(f"Personenname zu lang für ein Registrier-Token (höchstens {MAX_PREFIX - 1} Zeichen)")
+        raise ValueError(f"Name too long for a registration token (at most {MAX_PREFIX - 1} characters)")
     return prefix
 
 

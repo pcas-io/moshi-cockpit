@@ -16,7 +16,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES, Ctx
 from cockpit.harnesses.base import DROPPED_ENV, DROPPED_ENV_PREFIXES, TOKEN_ENV_PREFIXES
-from cockpit.keychain import Keychain
+from cockpit.secrets import SecretStore
 from cockpit.paths import Paths
 from cockpit.registry import find
 
@@ -35,7 +35,7 @@ def agent_env(base: Mapping[str, str], extra: Dict[str, str], clean: bool) -> Di
     return env
 
 
-def command(paths: Paths, keychain: Keychain, name: str, extra: Sequence[str]):
+def command(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str]):
     agent = find(paths, name)
     harness = HARNESSES[agent.harness]
     argv, env = harness.command(Ctx(paths=paths, config=load_config(paths), keychain=keychain), agent, extra)
@@ -53,7 +53,7 @@ def _on_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def run_agent(paths: Paths, keychain: Keychain, name: str, extra: Sequence[str],
+def run_agent(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str],
               execve: Exec = os.execve, environ: Mapping[str, str] = os.environ,
               on_terminal: Callable[[], bool] = _on_terminal) -> None:
     harness, argv, extra_env = command(paths, keychain, name, extra)

@@ -8,7 +8,8 @@ from typing import Callable, List, Optional
 
 from cockpit import agents, defaults, herdr
 from cockpit.admin import ADMIN_ACCOUNT, ADMIN_SERVICE
-from cockpit.keychain import Keychain, pending_service, stale_parked_message
+from cockpit.secrets import SecretStore
+from cockpit.secrets.macos import pending_service, stale_parked_message
 from cockpit.mcp import McpError, probe_unauthenticated
 from cockpit.config import load_config, origin
 from cockpit.paths import COCKPIT_IDENTITY, Paths, keychain_service
@@ -29,7 +30,7 @@ class Check:
 @dataclass(frozen=True)
 class DoctorContext:
     paths: Paths
-    keychain: Keychain
+    keychain: SecretStore
     pins: dict
     probe: Callable = probe_unauthenticated
     core_version: Callable = herdr.installed_core_version
@@ -120,8 +121,7 @@ def check_config(ctx: DoctorContext) -> List[Check]:
     if not config.servers:
         return [Check("config", OK, "keine Server eingerichtet: Agents lokal, ohne moshi und ocellio")]
     detail = ", ".join(f"{name} {url}" for name, url in sorted(config.servers.items()))
-    who = f"; Person {config.person}" if config.person else ""
-    return [Check("config", OK, detail + who)]
+    return [Check("config", OK, detail)]
 
 
 def check_identities(ctx: DoctorContext) -> List[Check]:

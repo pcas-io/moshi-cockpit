@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from cockpit.harnesses.base import TOKEN_ENV, Ctx, Harness
-from cockpit.person import ALWAYS, ASK
+from cockpit.policy import ALWAYS, ASK
 from cockpit.registry import Agent
 
 

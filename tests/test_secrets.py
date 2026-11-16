@@ -3,28 +3,47 @@ import stat
 import unittest
 
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain, KeychainError, strict_in_dump
+import platform
+from unittest import mock
+
+from cockpit.secrets import KeychainError, UnsupportedPlatform, default_store
+from cockpit.secrets.macos import MacKeychain, strict_in_dump
 from tests.helpers import FakeSecurity, temp_paths
 
 TOKEN = "bt_SECRETVALUE_1234567890"
 
 
+class DefaultStoreTest(unittest.TestCase):
+    def test_default_store_is_the_macos_keychain_on_darwin(self):
+        with mock.patch("platform.system", return_value="Darwin"):
+            store = default_store()
+        self.assertIsInstance(store, MacKeychain)
+        for method in ("exists", "read", "write", "delete"):
+            self.assertTrue(callable(getattr(store, method)), method)
+
+    def test_default_store_refuses_other_platforms_with_a_clear_sentence(self):
+        for system in ("Linux", "Windows"):
+            with mock.patch("platform.system", return_value=system), self.assertRaises(UnsupportedPlatform) as caught:
+                default_store()
+            self.assertEqual(str(caught.exception), "Windows and Linux are not supported yet")
+
+
 class KeychainTest(unittest.TestCase):
     def test_write_sends_secret_over_stdin_never_argv(self):
         fake = FakeSecurity()
-        Keychain(fake).write("moshi-vibe", "vibe", TOKEN)
+        MacKeychain(fake).write("moshi-vibe", "vibe", TOKEN)
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], TOKEN)
         self.assertFalse(fake.argv_contains(TOKEN))
 
     def test_strict_sets_empty_trusted_app_list(self):
         fake = FakeSecurity()
-        keychain = Keychain(fake)
+        keychain = MacKeychain(fake)
         keychain.write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertTrue(keychain.is_strict("moshi-vibe", "vibe"))
 
     def test_strict_replaces_an_existing_entry_instead_of_merging_its_acl(self):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789"})  # trusted: /usr/bin/security
-        keychain = Keychain(fake)
+        keychain = MacKeychain(fake)
         self.assertFalse(keychain.is_strict("moshi-vibe", "vibe"))
         keychain.write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertTrue(keychain.is_strict("moshi-vibe", "vibe"))
@@ -35,7 +54,7 @@ class KeychainTest(unittest.TestCase):
     def test_strict_rewrite_survives_one_failed_add(self):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789"})
         fake.fail_adds["moshi-vibe"] = 1
-        keychain = Keychain(fake)
+        keychain = MacKeychain(fake)
         keychain.write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], TOKEN)
         self.assertTrue(keychain.is_strict("moshi-vibe", "vibe"))
@@ -44,7 +63,7 @@ class KeychainTest(unittest.TestCase):
     def test_strict_rewrite_never_loses_the_token_and_recovers_it(self):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789"})
         fake.fail_adds["moshi-vibe"] = 2
-        keychain = Keychain(fake)
+        keychain = MacKeychain(fake)
         with self.assertRaises(KeychainError) as ctx:
             keychain.write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertIn("moshi-vibe.pending", str(ctx.exception))
@@ -61,7 +80,7 @@ class KeychainTest(unittest.TestCase):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789"})
         fake.weak.add("moshi-vibe.pending")
         with self.assertRaises(KeychainError):
-            Keychain(fake).write("moshi-vibe", "vibe", TOKEN, strict=True)
+            MacKeychain(fake).write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], "bt_OLDVALUE_123456789")
         self.assertNotIn(("moshi-vibe.pending", "vibe"), fake.entries)  # no weak copy left behind
 
@@ -69,7 +88,7 @@ class KeychainTest(unittest.TestCase):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789"})
         fake.weak.add("moshi-vibe")
         with self.assertRaises(KeychainError) as ctx:
-            Keychain(fake).write("moshi-vibe", "vibe", TOKEN, strict=True)
+            MacKeychain(fake).write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertIn("moshi-vibe.pending", str(ctx.exception))
         self.assertNotIn(("moshi-vibe", "vibe"), fake.entries)  # the weak entry was removed again
         self.assertEqual(fake.entries[("moshi-vibe.pending", "vibe")], TOKEN)
@@ -78,11 +97,11 @@ class KeychainTest(unittest.TestCase):
     def test_a_stale_parked_copy_next_to_the_entry_is_reported_not_guessed(self):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789",
                              ("moshi-vibe.pending", "vibe"): "bt_PARKEDVALUE_12345678"})
-        keychain = Keychain(fake)
+        keychain = MacKeychain(fake)
         self.assertTrue(keychain.has_parked("moshi-vibe", "vibe"))
         with self.assertRaises(KeychainError) as ctx:
             keychain.write("moshi-vibe", "vibe", TOKEN, strict=True)
-        self.assertIn("abgebrochenen Lauf", str(ctx.exception))
+        self.assertIn("interrupted run", str(ctx.exception))
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], "bt_OLDVALUE_123456789")
         self.assertEqual(fake.entries[("moshi-vibe.pending", "vibe")], "bt_PARKEDVALUE_12345678")
         self.assertFalse(keychain.restore_parked("moshi-vibe", "vibe"))
@@ -95,7 +114,7 @@ class KeychainTest(unittest.TestCase):
 
         def write(value):
             try:
-                Keychain(fake).write("moshi-vibe", "vibe", value, strict=True)
+                MacKeychain(fake).write("moshi-vibe", "vibe", value, strict=True)
             except KeychainError as exc:  # pragma: no cover - the assertion below shows it
                 errors.append(str(exc))
         values = ["bt_FIRSTVALUE_1234567890", "bt_SECONDVALUE_123456789"]
@@ -113,7 +132,7 @@ class KeychainTest(unittest.TestCase):
         fake = FakeSecurity({("moshi-vibe", "vibe"): "bt_OLDVALUE_123456789"})
         fake.fail_adds["moshi-vibe.pending"] = 1
         with self.assertRaises(KeychainError):
-            Keychain(fake).write("moshi-vibe", "vibe", TOKEN, strict=True)
+            MacKeychain(fake).write("moshi-vibe", "vibe", TOKEN, strict=True)
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], "bt_OLDVALUE_123456789")
 
     def test_a_failure_reported_only_on_stderr_is_an_error(self):
@@ -122,30 +141,30 @@ class KeychainTest(unittest.TestCase):
         def runner(args, input="", **_kw):  # `security -i` exits 0 and reports on stderr only
             return subprocess.CompletedProcess(args, 0, "", "add-generic-password: returned -25299\n")
         with self.assertRaises(KeychainError):
-            Keychain(runner).write("moshi-codex", "codex", TOKEN)
+            MacKeychain(runner).write("moshi-codex", "codex", TOKEN)
 
     def test_strict_check_fails_when_macos_kept_the_old_trusted_apps(self):
         fake = FakeSecurity()
-        keychain = Keychain(fake)
+        keychain = MacKeychain(fake)
         fake.dump = lambda: ""  # entry not found in the dump: not provably strict
         with self.assertRaises(KeychainError) as ctx:
             keychain.write("moshi-vibe", "vibe", TOKEN, strict=True)
-        self.assertIn("nicht gehärtet", str(ctx.exception))
+        self.assertIn("not hardened", str(ctx.exception))
 
     def test_exists_does_not_request_the_secret(self):
         fake = FakeSecurity({("moshi-vibe", "vibe"): TOKEN})
-        self.assertTrue(Keychain(fake).exists("moshi-vibe", "vibe"))
+        self.assertTrue(MacKeychain(fake).exists("moshi-vibe", "vibe"))
         self.assertNotIn("-w", fake.calls[-1][0])
 
     def test_read_missing_entry_names_entry_not_value(self):
         with self.assertRaises(KeychainError) as ctx:
-            Keychain(FakeSecurity()).read("moshi-agy", "agy")
+            MacKeychain(FakeSecurity()).read("moshi-agy", "agy")
         self.assertIn("moshi-agy", str(ctx.exception))
 
     def test_rejects_tokens_that_could_inject_commands(self):
         for bad in ('abc" -T "x', "short", "has space inside 123", "line\nbreak12345"):
             with self.subTest(bad=bad), self.assertRaises(KeychainError) as ctx:
-                Keychain(FakeSecurity()).write("moshi-vibe", "vibe", bad)
+                MacKeychain(FakeSecurity()).write("moshi-vibe", "vibe", bad)
             self.assertNotIn(bad, str(ctx.exception))
 
 

@@ -1,6 +1,6 @@
-"""No auto-approve path for the agents (a security guardrail of the person model).
+"""No auto-approve path for the agents (a security guardrail: "ask" must really ask).
 
-The person model only works if "ask" really asks. So: no grant that answers an ASK tool for the
+This only works if "ask" really asks. So: no grant that answers an ASK tool for the
 person, no skip-permissions/yolo/always-approve setting that the mesh agents inherit, and the
 panel starts the account agents (claude, grok) in a mode that asks.
 """
@@ -13,7 +13,7 @@ import re
 from typing import Dict, List, Sequence
 
 from cockpit.paths import Paths
-from cockpit.person import ALWAYS, ASK
+from cockpit.policy import ALWAYS, ASK
 from cockpit.text import clean
 
 # Settings that switch asking off, wherever they turn up in an agent's settings (truthy = finding).

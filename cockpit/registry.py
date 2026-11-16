@@ -3,8 +3,8 @@
 ~/.config/moshi-cockpit/agents.json (0600):
     {"agents": [{"name": "research", "harness": "codex", "role": "Recherche", "home": null}, …]}
 
-The name is the agent's identity everywhere: moshi name (`<person>-<name>` in the person model, see
-person.py), keychain entries `<server>-<name>` / account `<name>`, the herdr tab "<name> · mesh".
+The name is the agent's identity everywhere: moshi name (the same string), keychain entries
+`<server>-<name>` / account `<name>`, the herdr tab "<name> · mesh".
 Several agents may share a harness (two Codex agents, say), except agy, which reads one global config.
 """
 

@@ -1,6 +1,6 @@
 """claude: each agent has its own moshi identity (one agent, one identity): its token is passed in the environment
 only, the server entry refers to it by name. ocellio stays as the CLI itself is set up (the person's token,
-person model). grok: no per-agent wiring yet. Both start in a mode that asks, whatever their own config says."""
+ask-first model). grok: no per-agent wiring yet. Both start in a mode that asks, whatever their own config says."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import List
 
 from cockpit.approvals import grok_findings
 from cockpit.harnesses.base import TOKEN_ENV, Ctx, Harness
-from cockpit.person import MOSHI_ALWAYS
+from cockpit.policy import MOSHI_ALWAYS
 from cockpit.registry import Agent
 
 BEARER = "Bearer ${" + TOKEN_ENV["moshi"] + "}"  # a placeholder the CLI fills in: no token in argv or files

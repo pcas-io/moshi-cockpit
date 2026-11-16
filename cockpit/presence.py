@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional
 
 from cockpit.config import Config
-from cockpit.person import IRREVERSIBLE
+from cockpit.policy import IRREVERSIBLE
 
 
 def presence_text(moshi_name: str, config: Config, role: Optional[str] = None, skill: str = "") -> str:

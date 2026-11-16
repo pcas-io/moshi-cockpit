@@ -4,7 +4,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from cockpit import status
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from cockpit.mcp import McpClient, McpError, parse_body, probe_unauthenticated
 from tests.helpers import FakeSecurity, bind_cockpit, configure, temp_paths
 
@@ -77,7 +77,7 @@ class McpTest(unittest.TestCase):
         self.assertTrue(challenge.startswith("Bearer"))
 
     def test_status_end_to_end_with_keychain(self):
-        keychain = Keychain(FakeSecurity({("moshi-cockpit", "cockpit"): TOKEN}))
+        keychain = MacKeychain(FakeSecurity({("moshi-cockpit", "cockpit"): TOKEN}))
         paths = temp_paths(self)
         configure(paths, servers={})
         bind_cockpit(paths, self.url)
@@ -89,7 +89,7 @@ class McpTest(unittest.TestCase):
         self.assertNotIn("Hinweis", text)
 
     def test_status_warns_when_reading_as_an_agent(self):
-        keychain = Keychain(FakeSecurity({("moshi-vibe", "vibe"): TOKEN}))
+        keychain = MacKeychain(FakeSecurity({("moshi-vibe", "vibe"): TOKEN}))
         identity = status.pick_identity(keychain, None, ["vibe"])
         self.assertEqual(identity, "vibe")
         self.assertIn("Hinweis", status.render([], identity))

@@ -166,7 +166,7 @@ class StartTest(unittest.TestCase):
 class CommandLineTest(unittest.TestCase):
     def run_cli(self, notes):
         from cockpit import cli
-        args = mock.Mock(person=None, skip_herdr=False, moshi=None, ocellio=None)
+        args = mock.Mock(skip_herdr=False, moshi=None, ocellio=None)
         ctx, _ = context(self)
         with mock.patch.object(cli, "_context", return_value=ctx), mock.patch.object(cli.installer, "run", return_value=notes), \
                 mock.patch.object(cli.doctor, "run", return_value=[]), mock.patch("builtins.print") as printed:

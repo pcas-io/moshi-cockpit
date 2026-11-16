@@ -2,7 +2,7 @@
 
 The moshi identity is created, in this order:
 1. with the registration token (`moshi-cockpit bot register-token set`): it can create agents
-   with the person's prefix and nothing else. A refusal ends the run; there is no fallback to the
+   with names under its prefix and nothing else. A refusal ends the run; there is no fallback to the
    admin token, so a narrow token never silently escalates to the broad one.
 2. with the admin token (`moshi-cockpit bot admin-token`), on admin machines.
 3. on the connect page: the human creates it and pastes the token into a hidden prompt.
@@ -17,14 +17,13 @@ import webbrowser
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
-from cockpit.admin import AdminApi, AdminError, has_admin_token
+from cockpit.admin import AdminApi, has_admin_token
 from cockpit.register import RegisterApi, has_register_token
 from cockpit.agents import AgentContext, harness_ctx, setup
 from cockpit.config import load_config, moshi_base, origin, require
 from cockpit.harnesses import HARNESSES
-from cockpit.keychain import KeychainError, validate_token
+from cockpit.secrets import KeychainError, validate_token
 from cockpit.paths import COCKPIT_IDENTITY, keychain_service
-from cockpit.person import identity
 from cockpit.registry import bind, find, load_agents
 from cockpit.tokens import COCKPIT_OCELLIO, bind_identity, bound_origin
 from cockpit.text import clean
@@ -111,7 +110,7 @@ def _store_moshi(agent: str, ctx: AgentContext, io: BotIO, strict: bool, browser
     if existing:
         return existing
     if not browser:
-        url, name = config.server("moshi"), identity(agent, config.person)
+        url, name = config.server("moshi"), agent
         # A registration token, if there is one, is the only API way: its refusal ends the run, the admin
         # token is never tried after it, so a narrow token never escalates to the broad one.
         if has_register_token(ctx.keychain):
@@ -124,14 +123,7 @@ def _store_moshi(agent: str, ctx: AgentContext, io: BotIO, strict: bool, browser
             build = None
         if build is not None:
             io.say(f"   moshi-Identität '{name}' wird mit dem {way} angelegt (macOS fragt nach dem Schlüsselbund)")
-            try:
-                created, token = build().create_agent(name)
-            except AdminError as exc:
-                if way == "Registrier-Token" and not config.person and exc.reason == "name_prefix":
-                    raise AdminError(f"{exc}. Hier ist keine Person eingerichtet, der moshi-Name ist deshalb '{name}'. "
-                                     "Person setzen (moshi-cockpit install --person <name>) oder den Agent so "
-                                     "benennen, dass der Name mit dem Präfix beginnt") from None
-                raise
+            created, token = build().create_agent(name)
             try:
                 ctx.keychain.write(service, agent, token, strict=strict)
             except KeychainError as exc:
@@ -141,7 +133,7 @@ def _store_moshi(agent: str, ctx: AgentContext, io: BotIO, strict: bool, browser
                                  f"zurücksetzen, dann: moshi-cockpit bot add {agent} --browser") from None
             return f"{service}: Identität per {way} angelegt, Token in der Keychain (nie angezeigt)"
     connect = moshi_base(config.server("moshi")) + "/agents/connect"
-    io.say(f"1. In moshi die Identität '{identity(agent, config.person)}' anlegen: {connect}")
+    io.say(f"1. In moshi die Identität '{agent}' anlegen: {connect}")
     io.say("   (Name eingeben, Token kopieren. Das Token wird nur einmal angezeigt.)")
     io.open_url(connect)
     token = _ask_token(io, f"2. moshi-Token für '{agent}' einfügen (Eingabe unsichtbar): ")

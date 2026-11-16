@@ -14,7 +14,7 @@ from unittest import mock
 from cockpit import launch
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from cockpit.paths import Paths
 
 
@@ -104,7 +104,7 @@ MOSHI = "https://moshi.example.test/mcp"
 OCELLIO = "https://ocellio.example.test/mcp/"
 
 
-def configure(paths: Paths, servers=None, agents=(), person=None, bind=True) -> None:
+def configure(paths: Paths, servers=None, agents=(), bind=True) -> None:
     """Writes moshi-cockpit's config and agent list straight into a temp HOME (no backup store), owner-only
     like the real ones. With bind=True each agent's tokens are bound to the configured servers' origins."""
     import json as _json
@@ -113,8 +113,6 @@ def configure(paths: Paths, servers=None, agents=(), person=None, bind=True) -> 
     paths.mesh_config.parent.mkdir(parents=True, exist_ok=True)
     servers = dict(servers if servers is not None else {"moshi": MOSHI, "ocellio": OCELLIO})
     data = {"servers": servers}
-    if person:
-        data["person"] = person
     paths.mesh_config.write_text(_json.dumps(data))
     items = []
     for agent in agents:
@@ -142,7 +140,7 @@ OWN, FOREIGN = "bt_OWN_token_1234567890", "bt_FOREIGN_token_123456"
 def context(test, entries=None):
     paths = temp_paths(test)
     fake = FakeSecurity(entries or {})
-    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake)), fake
+    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake)), fake
 
 
 def start(ctx, name, extra=(), environ=None):

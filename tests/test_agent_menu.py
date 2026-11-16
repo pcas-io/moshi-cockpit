@@ -138,7 +138,7 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         configure(ctx.paths, agents=[{"name": "c1", "harness": "claude"}, {"name": "c2", "harness": "claude"},
                                      {"name": "g1", "harness": "grok"}])
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain), redirect_stdout(io.StringIO()) as out:
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["agent", "list", "--json"]), 0)
         data = json.loads(out.getvalue())
         state = {a["name"]: (a["native"], a["connected"]) for a in data["agents"]}
@@ -152,7 +152,7 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         ctx, _ = context(self, {("moshi-v1", "v1"): OWN})  # vibe wires ocellio too, that token is missing
         configure(ctx.paths, agents=[{"name": "v1", "harness": "vibe"}])
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain), redirect_stdout(io.StringIO()) as out:
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["agent", "list", "--json"]), 0)
         agent = json.loads(out.getvalue())["agents"][0]
         self.assertEqual((agent["connected"], agent["has_moshi_token"]), (False, True))

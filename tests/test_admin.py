@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from cockpit import admin, bots
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from tests.helpers import FakeSecurity, configure, temp_paths
 
 ADMIN_TOKEN = "admin_TOKEN_0123456789"
@@ -75,16 +75,16 @@ class AdminTest(unittest.TestCase):
 
     def test_admin_token_is_always_stored_with_dialog(self):
         fake = FakeSecurity()
-        admin.store_admin_token(Keychain(fake), ADMIN_TOKEN)
+        admin.store_admin_token(MacKeychain(fake), ADMIN_TOKEN)
         self.assertTrue(any('-T ""' in stdin for _args, stdin in fake.calls))
-        self.assertTrue(Keychain(fake).is_strict(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT))
+        self.assertTrue(MacKeychain(fake).is_strict(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT))
         self.assertFalse(fake.argv_contains(ADMIN_TOKEN))
 
     def test_bot_add_uses_api_when_admin_token_present(self):
         paths = temp_paths(self)
         fake = FakeSecurity({(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): ADMIN_TOKEN})
         configure(paths)
-        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake))
+        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake))
         opened = []
         io = bots.BotIO(ask_secret=lambda _p: "unused", open_url=lambda u: opened.append(u) or True,
                         say=lambda _m: None, admin_api=lambda: self.api())
@@ -98,7 +98,7 @@ class AdminTest(unittest.TestCase):
         paths = temp_paths(self)
         fake = FakeSecurity({(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): ADMIN_TOKEN})
         configure(paths)
-        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake))
+        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake))
         opened = []
         io = bots.BotIO(ask_secret=lambda _p: NEW_TOKEN, open_url=lambda u: opened.append(u) or True,
                         say=lambda _m: None, admin_api=lambda: self.fail("API must not be used"))
@@ -108,7 +108,7 @@ class AdminTest(unittest.TestCase):
     def test_bot_add_cockpit_needs_moshi(self):
         paths = temp_paths(self)
         configure(paths, servers={})
-        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(FakeSecurity()))
+        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(FakeSecurity()))
         io = bots.BotIO(ask_secret=lambda _p: self.fail("no prompt"), open_url=lambda _u: True, say=lambda _m: None)
         with self.assertRaises(ValueError):
             bots.add("cockpit", ctx, io)

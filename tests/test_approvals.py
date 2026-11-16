@@ -4,12 +4,12 @@ import re
 import unittest
 from unittest import mock
 
-from cockpit import approvals, bots, launch, person
+from cockpit import approvals, bots, launch, policy
 from cockpit.agents import AgentContext
 from cockpit.config import Config
 from cockpit.presence import presence_text
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from cockpit.paths import BIN
 from tests.helpers import MOSHI, OCELLIO, FakeSecurity, configure, temp_paths
 from tests.test_leak_check import leak_check
@@ -17,43 +17,17 @@ from tests.test_leak_check import leak_check
 
 def ctx_for(test, entries=None):
     paths = temp_paths(test)
-    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(FakeSecurity(entries or {})))
+    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(FakeSecurity(entries or {})))
 
 
-class PersonTest(unittest.TestCase):
-    def test_names_and_storage(self):
-        ctx = ctx_for(self)
-        self.assertIsNone(person.load_person(ctx.paths))
-        self.assertEqual(person.identity("vibe", None), "vibe")
-        self.assertTrue(person.save_person(ctx.paths, ctx.backup, " Anna "))
-        self.assertEqual(person.load_person(ctx.paths), "anna")
-        self.assertEqual(person.identity("vibe", "anna"), "anna-vibe")
-        for bad in ("", "a b", "-x", "x" * 42, "an\nna", "an/na"):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                person.validate_person(bad)
-
-    def test_a_broken_or_invalid_config_is_an_error_not_the_plain_names(self):
-        ctx = ctx_for(self)
-        ctx.paths.mesh_config.parent.mkdir(parents=True)
-        for text in ("{ kaputt", json.dumps({"person": "../anna"}), json.dumps(["anna"])):
-            ctx.paths.mesh_config.write_text(text)
-            with self.subTest(text=text), self.assertRaises(ValueError):
-                person.load_person(ctx.paths)
-        ctx.paths.agents_file.write_text(json.dumps({"agents": [{"name": "vibe", "harness": "vibe"}]}))
-        ctx.paths.mesh_config.write_text(json.dumps({"person": "../anna", "servers": {"moshi": MOSHI}}))
-        io = bots.BotIO(ask_secret=lambda _p: "bt_X_1234567890", open_url=lambda _u: True, say=lambda _m: None)
-        with self.assertRaises(ValueError):
-            bots.add("vibe", ctx, io)
-        self.assertTrue(person.save_person(ctx.paths, ctx.backup, "anna"))  # the way out
-        self.assertEqual(person.load_person(ctx.paths), "anna")
-
+class PresenceTest(unittest.TestCase):
     def test_presence_is_neutral_and_follows_the_servers(self):
-        both = presence_text("anna-codex", Config(person="anna", servers={"moshi": MOSHI, "ocellio": OCELLIO}), "Review")
-        self.assertIn("`anna-codex`", both)
+        both = presence_text("codex", Config(servers={"moshi": MOSHI, "ocellio": OCELLIO}), "Review")
+        self.assertIn("`codex`", both)
         self.assertIn("Rolle: Review", both)
         self.assertIn("mesh_register", both)
         self.assertIn("context_load", both)
-        for tool in person.IRREVERSIBLE:
+        for tool in policy.IRREVERSIBLE:
             self.assertIn(f"`{tool}`", both)
         self.assertIn("IRREVERSIBEL:", both)
         with_skill = presence_text("x", Config(servers={"ocellio": OCELLIO}), "Review", "skill-a")
@@ -70,10 +44,9 @@ class PersonTest(unittest.TestCase):
         for line in (both + alone).splitlines():
             self.assertEqual(leak_check.scan_line(line, words), [], line)
 
-    def test_bot_add_creates_the_person_name_in_moshi(self):
+    def test_bot_add_creates_the_plain_agent_name_in_moshi(self):
         ctx = ctx_for(self, {("moshi-admin", "admin"): "bt_ADMIN_token_1234567890"})
         configure(ctx.paths, agents=[{"name": "vibe", "harness": "vibe"}])
-        person.save_person(ctx.paths, ctx.backup, "anna")
         created = []
 
         class Api:
@@ -83,7 +56,7 @@ class PersonTest(unittest.TestCase):
         io = bots.BotIO(ask_secret=lambda _p: "oc_PERSONTOKEN_12345678", open_url=lambda _u: True,
                         say=lambda _m: None, admin_api=Api)
         bots.add("vibe", ctx, io)
-        self.assertEqual(created, ["anna-vibe"])
+        self.assertEqual(created, ["vibe"])
 
 
 class ApprovalTest(unittest.TestCase):
@@ -197,9 +170,9 @@ class ApprovalTest(unittest.TestCase):
                                     {"moshi": "MESH_MOSHI_TOKEN", "ocellio": "MESH_OCELLIO_TOKEN"})
         flat = " ".join(args)
         self.assertIn('approvals_reviewer="user"', flat)
-        for tool in person.OCELLIO_ASK:
+        for tool in policy.OCELLIO_ASK:
             self.assertIn(f'mcp_servers.ocellio.tools.{tool}.approval_mode="prompt"', flat)
-        for tool in person.OCELLIO_ALWAYS:
+        for tool in policy.OCELLIO_ALWAYS:
             self.assertIn(f'mcp_servers.ocellio.tools.{tool}.approval_mode="approve"', flat)
         self.assertIn('mcp_servers.moshi.default_tools_approval_mode="prompt"', flat)
         self.assertIn(f"mcp_servers.moshi.url={json.dumps(MOSHI)}", flat)

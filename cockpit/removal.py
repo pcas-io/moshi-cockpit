@@ -16,7 +16,6 @@ from cockpit.agents import AgentContext
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES
 from cockpit.paths import keychain_service
-from cockpit.person import identity
 
 
 def remove_agent(ctx: AgentContext, name: str, revoke: Optional[bool] = None,
@@ -27,7 +26,7 @@ def remove_agent(ctx: AgentContext, name: str, revoke: Optional[bool] = None,
     config = load_config(ctx.paths)
     notes: List[str] = []
     if config.has("moshi") and HARNESSES[target.harness].native_mesh:
-        moshi_name = identity(target.name, config.person)
+        moshi_name = target.name
         # Revoking goes by name, and moshi names are shared with everyone else in the mesh: only an agent
         # that holds a token of its own here is known to own that name.
         if not ctx.keychain.exists(keychain_service("moshi", target.name), target.name):

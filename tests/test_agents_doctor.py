@@ -9,7 +9,7 @@ from pathlib import Path
 from cockpit import agents, bots, defaults, doctor, installer, registry
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from cockpit.pins import PinError, load_pins
 from tests.helpers import MOSHI, OCELLIO, FakeSecurity, configure, temp_paths
 
@@ -19,7 +19,7 @@ OC, MO = "oc_TOKEN_aaaaaaaa", "bt_TOKEN_bbbbbbbb"
 def context(test, entries=None):
     paths = temp_paths(test)
     fake = FakeSecurity(entries or {})
-    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake)), fake
+    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake)), fake
 
 
 VIBE = {"name": "vibe", "harness": "vibe"}
@@ -27,13 +27,13 @@ AGY = {"name": "agy", "harness": "agy"}
 CODEX = {"name": "codex", "harness": "codex"}
 
 
-def registered(test, entries=None, servers=None, agents_=(VIBE, AGY, CODEX), person=None):
+def registered(test, entries=None, servers=None, agents_=(VIBE, AGY, CODEX)):
     # The CLIs themselves are not installed in CI; whether they are is not what these tests check.
     patcher = mock.patch("cockpit.harnesses.base.Harness.installed", return_value=True)
     patcher.start()
     test.addCleanup(patcher.stop)
     ctx, fake = context(test, entries)
-    configure(ctx.paths, servers=servers, agents=agents_, person=person)
+    configure(ctx.paths, servers=servers, agents=agents_)
     agents.link_launchers(ctx)
     return ctx, fake
 
@@ -243,10 +243,10 @@ class DefaultsDoctorTest(unittest.TestCase):
 
     def test_local_agents_carry_name_harness_and_moshi_name(self):
         from cockpit import config, status
-        ctx, _ = registered(self, person="anna", agents_=[{"name": "research", "harness": "codex", "role": "R"}])
+        ctx, _ = registered(self, agents_=[{"name": "research", "harness": "codex", "role": "R"}])
         local = status.local_agents(ctx.paths, config.load_config(ctx.paths), ctx.keychain)
         self.assertEqual([(a["name"], a["harness"], a["moshi_name"], a["role"]) for a in local],
-                         [("research", "codex", "anna-research", "R")])
+                         [("research", "codex", "research", "R")])
         ctx2, _ = registered(self, servers={}, agents_=[{"name": "solo", "harness": "vibe"}])
         self.assertEqual(status.local_agents(ctx2.paths, config.load_config(ctx2.paths), ctx2.keychain)[0]["moshi_name"], "")
 
@@ -336,7 +336,7 @@ class DefaultsDoctorTest(unittest.TestCase):
             paths=ctx.paths, keychain=ctx.keychain, pins=load_pins()))}
         parked = results["keychain-parked"]
         self.assertEqual(parked.status, doctor.WARN)
-        self.assertIn("abgebrochenen Lauf", parked.detail)   # next to an existing entry
+        self.assertIn("interrupted run", parked.detail)   # next to an existing entry
         self.assertIn("stellt sie wieder her", parked.detail)  # entry missing, copy there
         self.assertNotIn(MO, parked.detail)
 
@@ -356,7 +356,7 @@ class AgentCommandTest(unittest.TestCase):
         from cockpit import cli
         paths = temp_paths(self)
         env = {"HOME": str(paths.home)}
-        with mock.patch.dict(os.environ, env), mock.patch("cockpit.cli.Keychain", return_value=Keychain(FakeSecurity())):
+        with mock.patch.dict(os.environ, env), mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())):
             out = _io.StringIO()
             with redirect_stdout(out):
                 self.assertEqual(cli.main(["agent", "add", "research", "--harness", "codex", "--role", "Recherche"]), 0)

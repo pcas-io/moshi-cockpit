@@ -1,4 +1,4 @@
-"""macOS Keychain access via `security`. Secrets never appear in argv, stdout or error messages."""
+"""SecretStore on the macOS Keychain, via `security`. Secrets never appear in argv, stdout or error messages."""
 
 from __future__ import annotations
 
@@ -10,16 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence
 
+from cockpit.secrets import KeychainError, validate_token
+
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
-
-# Tokens from ocellio and moshi are URL-safe. A strict charset keeps the
-# `security -i` command line injection-free without shell quoting tricks.
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~\-]{8,512}$")
-
-
-class KeychainError(RuntimeError):
-    """Raised with a message that names the entry, never its value."""
-
 
 def _run(runner: Runner, args: Sequence[str], stdin: str = "") -> "subprocess.CompletedProcess[str]":
     return runner(list(args), input=stdin, capture_output=True, text=True, check=False)
@@ -32,7 +25,7 @@ def default_lock_dir() -> Path:
     return Path(os.environ.get("HOME") or str(Path.home())) / ".local" / "state" / "moshi-cockpit" / "locks"
 
 
-class Keychain:
+class MacKeychain:
     def __init__(self, runner: Runner = subprocess.run, lock_dir: Optional[Path] = None) -> None:
         self._runner = runner
         self._lock_dir = lock_dir
@@ -58,10 +51,10 @@ class Keychain:
     def read(self, service: str, account: str) -> str:
         result = _run(self._runner, ["security", "find-generic-password", "-a", account, "-s", service, "-w"])
         if result.returncode != 0:
-            raise KeychainError(f"Keychain-Eintrag '{service}' (Account '{account}') fehlt oder ist gesperrt")
+            raise KeychainError(f"Keychain entry '{service}' (account '{account}') is missing or locked")
         secret = result.stdout.strip()
         if not secret:
-            raise KeychainError(f"Keychain-Eintrag '{service}' ist leer")
+            raise KeychainError(f"Keychain entry '{service}' is empty")
         return secret
 
     def write(self, service: str, account: str, secret: str, strict: bool = False) -> None:
@@ -95,14 +88,14 @@ class Keychain:
             self._add(parked, account, secret, strict=True)
             if not self.is_strict(parked, account):
                 self.delete(parked, account)
-                raise KeychainError(f"Sicherung '{parked}' ließ sich nicht gehärtet anlegen; "
-                                    f"'{service}' ist unverändert")
+                raise KeychainError(f"Backup '{parked}' is not hardened; "
+                                    f"'{service}' is unchanged")
             self._replace_from_parked(service, account, secret)
 
     def _replace_from_parked(self, service: str, account: str, secret: str) -> None:
         parked = pending_service(service)
-        kept = (f"Das Token ist nicht verloren, es liegt gehärtet unter '{parked}'. Erneut ausführen stellt "
-                "es wieder her (moshi-cockpit bot add … --strict-keychain)")
+        kept = (f"The token is not lost, it is stored hardened under '{parked}'. Running the command again "
+                "restores it (moshi-cockpit bot add … --strict-keychain)")
         if self.exists(service, account):
             self.delete(service, account)
         for attempt in (1, 2):
@@ -111,10 +104,10 @@ class Keychain:
                 break
             except KeychainError:
                 if attempt == 2:
-                    raise KeychainError(f"Keychain-Eintrag '{service}' konnte nicht neu angelegt werden. {kept}") from None
+                    raise KeychainError(f"Keychain entry '{service}' could not be created again. {kept}") from None
         if not self.is_strict(service, account):
             self.delete(service, account)
-            raise KeychainError(f"Keychain-Eintrag '{service}' ist nicht gehärtet und wurde wieder entfernt. {kept}")
+            raise KeychainError(f"Keychain entry '{service}' is not hardened and was removed again. {kept}")
         self.delete(parked, account)
 
     def has_parked(self, service: str, account: str) -> bool:
@@ -130,7 +123,7 @@ class Keychain:
             if self.exists(service, account) or not self.exists(parked, account):
                 return False
             if not self.is_strict(parked, account):
-                raise KeychainError(f"Sicherung '{parked}' ist nicht gehärtet; bitte von Hand prüfen")
+                raise KeychainError(f"Backup '{parked}' is not hardened; please check by hand")
             self._replace_from_parked(service, account, self.read(parked, account))
         return True
 
@@ -140,13 +133,13 @@ class Keychain:
         # `security -i` exits 0 even when the command inside failed; its stderr says so.
         err = (result.stderr or "").lower()
         if result.returncode != 0 or "error" in err or "returned -" in err or "security:" in err:
-            raise KeychainError(f"Konnte Keychain-Eintrag '{service}' nicht schreiben")
+            raise KeychainError(f"Could not write Keychain entry '{service}'")
 
     def delete(self, service: str, account: str) -> None:
         _check_names(service, account)
         result = _run(self._runner, ["security", "delete-generic-password", "-a", account, "-s", service])
         if result.returncode != 0:
-            raise KeychainError(f"Konnte Keychain-Eintrag '{service}' nicht löschen")
+            raise KeychainError(f"Could not delete Keychain entry '{service}'")
 
     def is_strict(self, service: str, account: str) -> bool:
         """True when reading the entry's secret has no trusted app: macOS asks every time.
@@ -200,17 +193,12 @@ def pending_service(service: str) -> str:
 
 def stale_parked_message(service: str, account: str) -> str:
     parked = pending_service(service)
-    return (f"Neben '{service}' liegt noch die Sicherung '{parked}' aus einem abgebrochenen Lauf. Welcher Wert "
-            f"gilt, ist offen: prüfen und den überzähligen Eintrag löschen, z. B. "
+    return (f"Next to '{service}' there is still the backup '{parked}' from an interrupted run. Which value "
+            f"is current is unknown: check, then delete the extra entry, e.g. "
             f"security delete-generic-password -s {parked} -a {account}")
 
 
 def _check_names(service: str, account: str) -> None:
     for part in (service, account):
         if not re.match(r"^[A-Za-z0-9._\-]{1,64}$", part):
-            raise KeychainError("Ungültiger Service- oder Account-Name")
-
-
-def validate_token(secret: str) -> None:
-    if not _TOKEN_RE.match(secret or ""):
-        raise KeychainError("Token hat ein unerwartetes Format (erlaubt: A-Z a-z 0-9 . _ ~ -, 8–512 Zeichen)")
+            raise KeychainError("Invalid service or account name")

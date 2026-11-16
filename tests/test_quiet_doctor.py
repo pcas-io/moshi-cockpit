@@ -75,7 +75,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("1 Prüfungen", lines[0])
 
     def install(self, results, notes=("x",), **options):
-        args = mock.Mock(person=None, skip_herdr=False, moshi=None, ocellio=None)
+        args = mock.Mock(skip_herdr=False, moshi=None, ocellio=None)
         args.configure_mock(**options)
         with mock.patch.object(cli, "_context", return_value=self.ctx), mock.patch.object(cli.installer, "run", return_value=list(notes)), \
                 mock.patch.object(cli.doctor, "run", return_value=results) as run, mock.patch("builtins.print") as printed:

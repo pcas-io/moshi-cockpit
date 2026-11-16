@@ -9,7 +9,7 @@ from typing import List
 from cockpit.backup import BackupStore
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES, Ctx
-from cockpit.keychain import Keychain
+from cockpit.secrets import SecretStore
 from cockpit.paths import BIN, Paths
 from cockpit.registry import Agent
 
@@ -21,7 +21,7 @@ LAUNCHERS = ("moshi-cockpit",)
 class AgentContext:
     paths: Paths
     backup: BackupStore
-    keychain: Keychain
+    keychain: SecretStore
 
 
 def harness_ctx(ctx: AgentContext) -> Ctx:

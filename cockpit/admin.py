@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from cockpit.keychain import Keychain
+from cockpit.secrets import SecretStore
 from cockpit.config import moshi_base
 from cockpit.paths import USER_AGENT
 from cockpit.text import clean
@@ -33,11 +33,11 @@ class AdminError(RuntimeError):
         self.status = status
 
 
-def has_admin_token(keychain: Keychain) -> bool:
+def has_admin_token(keychain: SecretStore) -> bool:
     return keychain.exists(ADMIN_SERVICE, ADMIN_ACCOUNT)
 
 
-def store_admin_token(keychain: Keychain, token: str) -> None:
+def store_admin_token(keychain: SecretStore, token: str) -> None:
     keychain.write(ADMIN_SERVICE, ADMIN_ACCOUNT, token, strict=True)  # always with a confirmation dialog
 
 
@@ -49,7 +49,7 @@ class AdminApi:
         self._base = base or moshi_base(moshi_url) + "/api/admin"
 
     @classmethod
-    def from_keychain(cls, keychain: Keychain, moshi_url: str, paths, opener: Opener = urllib.request.urlopen) -> "AdminApi":
+    def from_keychain(cls, keychain: SecretStore, moshi_url: str, paths, opener: Opener = urllib.request.urlopen) -> "AdminApi":
         """The admin token only for the origin it was stored for (bot admin-token binds it)."""
         from cockpit.tokens import ADMIN, moshi_token
         return cls(moshi_token(paths, keychain, ADMIN, moshi_url), moshi_url, opener)

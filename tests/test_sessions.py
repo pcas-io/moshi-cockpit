@@ -193,7 +193,7 @@ class SessionsCliTest(unittest.TestCase):  # standard agents of the "+" menu hav
     def run_cli(self, *args):
         paths = temp_paths(self)
         configure(paths, agents=[{"name": "a1", "harness": "grok"}])
-        with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), mock.patch("cockpit.cli.Keychain"), \
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), mock.patch("cockpit.cli.default_store"), \
                 redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
             code = cli.main(["sessions", *args])
         return code, out.getvalue()

@@ -14,9 +14,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from cockpit.backup import BackupStore
 from cockpit.config import Config, origin
-from cockpit.keychain import Keychain
+from cockpit.secrets import SecretStore
 from cockpit.paths import Paths, keychain_service
-from cockpit.person import identity
 from cockpit.presence import presence_text
 from cockpit.registry import Agent
 
@@ -36,7 +35,7 @@ TOKEN_ENV_PREFIXES = ("MESH_", "MOSHI_", "OCELLIO_")
 class Ctx:
     paths: Paths
     config: Config
-    keychain: Keychain
+    keychain: SecretStore
     backup: Optional[BackupStore] = None
 
 
@@ -65,7 +64,7 @@ class Harness:
         return bool(shutil.which(self.binary)) or (paths.local_bin / self.binary).exists()
 
     def moshi_name(self, ctx: Ctx, agent: Agent) -> str:
-        return identity(agent.name, ctx.config.person)
+        return agent.name
 
     def presence(self, ctx: Ctx, agent: Agent) -> str:
         return presence_text(self.moshi_name(ctx, agent), ctx.config, agent.role, agent.skill)

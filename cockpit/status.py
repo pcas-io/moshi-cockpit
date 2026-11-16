@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from cockpit.keychain import Keychain, KeychainError
+from cockpit.secrets import KeychainError, SecretStore
 from cockpit.mcp import McpClient
 from cockpit.paths import COCKPIT_IDENTITY, keychain_service
 from cockpit.text import clean
 from cockpit.tokens import moshi_token
 
 
-def pick_identity(keychain: Keychain, requested: Optional[str], agent_names: Sequence[str] = ()) -> str:
+def pick_identity(keychain: SecretStore, requested: Optional[str], agent_names: Sequence[str] = ()) -> str:
     """A dedicated 'cockpit' identity is preferred: every MCP call refreshes the caller's presence,
     so reading with an agent's token would make that agent look online."""
     candidates = [requested] if requested else [COCKPIT_IDENTITY, *agent_names]
@@ -23,13 +23,13 @@ def pick_identity(keychain: Keychain, requested: Optional[str], agent_names: Seq
     raise KeychainError("Kein moshi-Token gefunden. Empfohlen: moshi-cockpit bot add cockpit")
 
 
-def fetch_status(keychain: Keychain, identity: str, url: str, paths,
+def fetch_status(keychain: SecretStore, identity: str, url: str, paths,
                  client_factory: Callable[[str, str], McpClient] = McpClient) -> Dict:
     token = moshi_token(paths, keychain, identity, url)  # only for the bound origin
     return client_factory(url, token).call_tool("mesh_status")
 
 
-def fetch_agents(keychain: Keychain, identity: str, url: str, paths,
+def fetch_agents(keychain: SecretStore, identity: str, url: str, paths,
                  client_factory: Callable[[str, str], McpClient] = McpClient) -> List[Dict]:
     return list(fetch_status(keychain, identity, url, paths, client_factory).get("agents") or [])
 
@@ -37,7 +37,7 @@ def fetch_agents(keychain: Keychain, identity: str, url: str, paths,
 FIELDS = ("name", "role", "presence", "working_on", "last_seen_at")
 
 
-def local_agents(paths, config, keychain: Keychain) -> List[Dict]:
+def local_agents(paths, config, keychain: SecretStore) -> List[Dict]:
     """The person's registered agents for the sidebar: name, harness, moshi name, startable here."""
     from cockpit.harnesses import HARNESSES, Ctx
     from cockpit.registry import load_agents

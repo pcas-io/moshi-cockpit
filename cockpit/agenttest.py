@@ -9,26 +9,24 @@ from __future__ import annotations
 import subprocess
 from typing import Callable, Dict, List, Optional, Sequence
 
-from cockpit.keychain import Keychain, KeychainError
+from cockpit.secrets import KeychainError, SecretStore
 from cockpit.mcp import McpClient, McpError
 from cockpit.config import load_config, require
 from cockpit.tokens import moshi_token
 from cockpit.paths import BIN, keychain_service
 from cockpit.paths import Paths
-from cockpit.person import identity as moshi_name
 from cockpit.status import fetch_agents, pick_identity
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-def snapshot(keychain: Keychain, agents: Sequence[str], identity: str, url: str, paths: Paths,
-             person: Optional[str] = None) -> Dict[str, str]:
-    """working_on per local agent, looked up under its moshi name (`<person>-<agent>` or `<agent>`)."""
+def snapshot(keychain: SecretStore, agents: Sequence[str], identity: str, url: str, paths: Paths) -> Dict[str, str]:
+    """working_on per local agent, looked up under its moshi name (the agent's name)."""
     current = {a.get("name"): a.get("working_on") or "idle" for a in fetch_agents(keychain, identity, url, paths)}
-    return {agent: current.get(moshi_name(agent, person), "idle") for agent in agents}
+    return {agent: current.get(agent, "idle") for agent in agents}
 
 
-def restore(keychain: Keychain, before: Dict[str, str], url: str, paths: Paths,
+def restore(keychain: SecretStore, before: Dict[str, str], url: str, paths: Paths,
             client_factory: Callable[[str, str], McpClient] = McpClient) -> List[str]:
     notes = []
     for agent, working_on in before.items():
@@ -41,13 +39,13 @@ def restore(keychain: Keychain, before: Dict[str, str], url: str, paths: Paths,
     return notes
 
 
-def run(keychain: Keychain, agents: Sequence[str], report_to: str, runner: Runner = subprocess.run,
+def run(keychain: SecretStore, agents: Sequence[str], report_to: str, runner: Runner = subprocess.run,
         paths: Optional[Paths] = None) -> int:
     paths = paths or Paths.from_env()
     config = load_config(paths)
     url = require(config, "moshi")
     identity = pick_identity(keychain, None, agents)
-    before = snapshot(keychain, agents, identity, url, paths, config.person)
+    before = snapshot(keychain, agents, identity, url, paths)
     result = runner([str(BIN / "mesh-agent-test"), report_to, *agents], check=False)
     for note in restore(keychain, before, url, paths):
         print(note)

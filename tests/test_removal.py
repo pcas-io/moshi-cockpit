@@ -9,7 +9,7 @@ from unittest import mock
 from cockpit import admin, cli, registry, removal, wizard
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from tests.helpers import FakeSecurity, configure, temp_paths
 
 AGENT_TOKEN, OCELLIO_TOKEN, ADMIN_TOKEN = "bt_AGENT_0123456789", "pt_OCELLIO_0123456789", "admin_TOKEN_0123456789"
@@ -29,12 +29,12 @@ class FakeAdmin:
 class RemovalTest(unittest.TestCase):
     def ctx(self, admin_token=True, servers=None, harness="codex"):
         paths = temp_paths(self)
-        configure(paths, servers=servers, person="anna", agents=[{"name": "research", "harness": harness}])
+        configure(paths, servers=servers, agents=[{"name": "research", "harness": harness}])
         entries = {("moshi-research", "research"): AGENT_TOKEN, ("ocellio-research", "research"): OCELLIO_TOKEN}
         if admin_token:
             entries[(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT)] = ADMIN_TOKEN
         fake = FakeSecurity(entries)
-        return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake)), fake
+        return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake)), fake
 
     def gone(self, ctx, fake):
         self.assertEqual(registry.load_agents(ctx.paths), [])
@@ -51,8 +51,8 @@ class RemovalTest(unittest.TestCase):
         ctx, fake = self.ctx()
         api, asked = FakeAdmin(), []
         notes = removal.remove_agent(ctx, "research", confirm=lambda q: asked.append(q) or True, admin_api=lambda: api)
-        self.assertEqual(api.revoked, ["anna-research"])  # the person's moshi name
-        self.assertIn("anna-research", asked[0])
+        self.assertEqual(api.revoked, ["research"])  # the agent's moshi name, equal to its local name
+        self.assertIn("research", asked[0])
         self.assertTrue(any("widerrufen" in n for n in notes))
         self.gone(ctx, fake)
         self.no_secret(notes, fake)
@@ -110,13 +110,13 @@ class RemovalTest(unittest.TestCase):
         ctx, fake = self.ctx(harness="claude")
         api = FakeAdmin()
         removal.remove_agent(ctx, "research", revoke=True, admin_api=lambda: api)
-        self.assertEqual(api.revoked, ["anna-research"])
+        self.assertEqual(api.revoked, ["research"])
 
     def test_cli_without_terminal_never_revokes_unasked(self):
         ctx, fake = self.ctx()
         api = FakeAdmin()
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain), \
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), \
                 mock.patch("cockpit.removal.AdminApi.from_keychain", return_value=api), \
                 mock.patch("sys.stdin.isatty", return_value=False), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["agent", "remove", "research"]), 0)
@@ -128,11 +128,11 @@ class RemovalTest(unittest.TestCase):
         ctx, fake = self.ctx()
         api = FakeAdmin()
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain), \
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), \
                 mock.patch("cockpit.removal.AdminApi.from_keychain", return_value=api), \
                 mock.patch("sys.stdin.isatty", return_value=False), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["agent", "remove", "research", "--revoke-moshi"]), 0)
-        self.assertEqual(api.revoked, ["anna-research"])
+        self.assertEqual(api.revoked, ["research"])
         self.assertNotIn(ADMIN_TOKEN, out.getvalue())
 
     def test_revoke_name_cannot_leave_the_url_path(self):
@@ -146,7 +146,7 @@ class RemovalTest(unittest.TestCase):
     def test_status_json_says_whether_admin_access_is_there_without_reading_it(self):
         ctx, fake = self.ctx(servers={})
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain), redirect_stdout(io.StringIO()) as out:
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["status", "--json"]), 0)
         self.assertIs(json.loads(out.getvalue())["admin"], True)
         self.assertFalse(any("-w" in args for args, _ in fake.calls))
@@ -156,7 +156,7 @@ class LocalAddTest(unittest.TestCase):
     def test_add_without_moshi_says_it_is_local_only(self):
         paths = temp_paths(self)
         configure(paths, servers={})
-        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(FakeSecurity()))
+        ctx = AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(FakeSecurity()))
         notes = wizard.create(ctx, "solo", "codex")
         self.assertTrue(any("Nur lokal" in n for n in notes))
 

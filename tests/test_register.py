@@ -13,7 +13,7 @@ from unittest import mock
 from cockpit import admin, bots, cli, doctor, register, registry, wizard
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain, KeychainError
+from cockpit.secrets.macos import MacKeychain, KeychainError
 from cockpit.tokens import REGISTER, bind_identity
 from tests.helpers import MOSHI, FakeSecurity, bind_cockpit, configure, temp_paths
 
@@ -34,7 +34,7 @@ class FakeRegisterApi(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != f"Bearer {RT}":
             return self._send(401, {"error": "invalid_token"})
         name = body.get("name", "")
-        if not name.startswith("anna-"):
+        if name.startswith("bob-"):
             return self._send(403, {"error": "name_prefix", "message": "Names must start with anna-\x1b[31m"})
         if name == "anna-taken":
             return self._send(409, {"error": "name_taken"})
@@ -89,11 +89,11 @@ class RegisterApiTest(unittest.TestCase):
             self.api(base=self.base.replace("/api/register", "/nothing")).create_agent("anna-vibe")
         self.assertIn("nicht deployt", str(ctx.exception))
 
-    def ctx(self, entries, person="anna"):
+    def ctx(self, entries):
         paths = temp_paths(self)
-        configure(paths, person=person, agents=[{"name": "vibe", "harness": "vibe"}])
+        configure(paths, agents=[{"name": "vibe", "harness": "vibe"}])
         fake = FakeSecurity(entries)
-        return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake)), fake
+        return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake)), fake
 
     def test_bot_add_prefers_registration_token_over_admin(self):
         ctx, fake = self.ctx({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT,
@@ -105,7 +105,7 @@ class RegisterApiTest(unittest.TestCase):
         notes = bots.add("vibe", ctx, io)
         self.assertIn("per Registrier-Token", notes[0])
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], NEW_TOKEN)
-        self.assertEqual(FakeRegisterApi.seen[-1][2], {"name": "anna-vibe"})
+        self.assertEqual(FakeRegisterApi.seen[-1][2], {"name": "vibe"})
         self.assertFalse(fake.argv_contains(NEW_TOKEN) or fake.argv_contains(RT))
 
     def test_refused_registration_token_never_falls_back_to_admin(self):
@@ -117,17 +117,6 @@ class RegisterApiTest(unittest.TestCase):
         with self.assertRaises(admin.AdminError):
             bots.add("vibe", ctx, io)
         self.assertNotIn(("moshi-vibe", "vibe"), fake.entries)
-
-    def test_prefix_refusal_without_person_explains_the_moshi_name(self):
-        ctx, fake = self.ctx({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT,
-                              (admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): ADMIN_TOKEN}, person=None)
-        io = bots.BotIO(ask_secret=lambda _p: self.fail("no prompt"), open_url=lambda _u: self.fail("no browser"),
-                        say=lambda _m: None, register_api=lambda: self.api(),
-                        admin_api=lambda: self.fail("admin token must not be used"))
-        with self.assertRaises(admin.AdminError) as ctx_exc:
-            bots.add("vibe", ctx, io)
-        self.assertIn("keine Person eingerichtet", str(ctx_exc.exception))
-        self.assertIn("'vibe'", str(ctx_exc.exception))
 
     def test_browser_flag_skips_registration_token(self):
         ctx, fake = self.ctx({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT,
@@ -153,7 +142,7 @@ class RegisterApiTest(unittest.TestCase):
         notes = bots.add("vibe", ctx, io)
         self.assertTrue(any("Admin-Token" in line for line in said))
         self.assertIn("per Admin-Token", notes[0])
-        self.assertEqual(used, ["anna-vibe"])
+        self.assertEqual(used, ["vibe"])
         # The agent token sits in the agent's slot, bound like every agent; the token slots stay apart
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], NEW_TOKEN)
         self.assertEqual(registry.find(ctx.paths, "vibe").bound["moshi"], "https://moshi.example.test")
@@ -173,7 +162,7 @@ class RegisterApiTest(unittest.TestCase):
         bind_cockpit(ctx.paths, identity="register")
         api = self.api(OTHER_RT)
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain), \
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), \
                 mock.patch("cockpit.bots.RegisterApi.from_keychain", return_value=api), \
                 mock.patch("cockpit.bots.AdminApi.from_keychain", side_effect=AssertionError("admin used")):
             self.assertEqual(cli.main(["bot", "add", "vibe"]), 1)
@@ -185,11 +174,11 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
 
     def ctx(self, entries, sibling_bound=True):
         paths = temp_paths(self)
-        configure(paths, person="anna", agents=[{"name": "neu", "harness": "vibe", "bound": {}},
+        configure(paths, agents=[{"name": "neu", "harness": "vibe", "bound": {}},
                                                 {"name": "alt", "harness": "codex",
                                                  "bound": {"ocellio": "https://ocellio.example.test"} if sibling_bound else {}}])
         fake = FakeSecurity(entries)
-        return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain(fake)), fake
+        return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=MacKeychain(fake)), fake
 
     def api(self):
         class Api:
@@ -207,7 +196,7 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
         ctx, fake = self.ctx({(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): ADMIN_TOKEN, ("ocellio-alt", "alt"): self.OCELLIO})
         api = self.api()
         notes = bots.add("neu", ctx, self.io(api), auto=True)
-        self.assertEqual(api.created, ["anna-neu"])
+        self.assertEqual(api.created, ["neu"])
         self.assertEqual(fake.entries[("ocellio-neu", "neu")], self.OCELLIO)
         self.assertEqual(fake.entries[("moshi-neu", "neu")], NEW_TOKEN)
         self.assertNotIn(self.OCELLIO, " ".join(notes))
@@ -219,7 +208,7 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
                 ctx, fake = self.ctx({(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): ADMIN_TOKEN, ("ocellio-alt", "alt"): self.OCELLIO})
                 fake.strict[("ocellio-alt", "alt")] = hardened
                 bots.add("neu", ctx, self.io(self.api()), auto=True)
-                self.assertEqual(Keychain(fake).is_strict("ocellio-neu", "neu"), hardened)
+                self.assertEqual(MacKeychain(fake).is_strict("ocellio-neu", "neu"), hardened)
 
     def test_stops_before_creating_anything_when_a_token_cannot_be_found(self):
         cases = [({(admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): ADMIN_TOKEN}, True),  # no ocellio token here
@@ -239,7 +228,7 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
         configure(paths)
         fake = FakeSecurity()
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=Keychain(fake)), redirect_stdout(io.StringIO()) as out:
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(fake)), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["agent", "add", "neu", "--harness=codex", "--connect"]), 0)
         self.assertIn("! Noch nicht angemeldet", out.getvalue())
         self.assertEqual(registry.find(paths, "neu").harness, "codex")
@@ -248,7 +237,7 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
         paths = temp_paths(self)
         configure(paths)
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=Keychain(FakeSecurity())), \
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())), \
                 mock.patch("cockpit.cli.bots.add", side_effect=urllib.error.URLError("offline")), \
                 redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["agent", "add", "neu", "--harness=codex", "--connect"]), 0)
@@ -258,7 +247,7 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
     def test_a_parked_ocellio_entry_is_restored_not_replaced_by_a_copy(self):
         ctx, _ = self.ctx({})
         api = self.api()
-        with mock.patch.object(Keychain, "restore_parked", return_value=True), \
+        with mock.patch.object(MacKeychain, "restore_parked", return_value=True), \
                 mock.patch("cockpit.bots._person_ocellio_token", side_effect=AssertionError("no copy")), \
                 mock.patch("cockpit.bots._store_moshi", side_effect=ValueError("stop here")), \
                 self.assertRaises(ValueError):
@@ -268,18 +257,18 @@ class AutoConnectTest(unittest.TestCase):  # "New agent" is one step: created an
 class RegistrationTokenStorageTest(unittest.TestCase):
     def test_stored_with_dialog_and_only_in_its_format(self):
         fake = FakeSecurity()
-        register.store_register_token(Keychain(fake), RT)
-        self.assertTrue(Keychain(fake).is_strict(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT))
+        register.store_register_token(MacKeychain(fake), RT)
+        self.assertTrue(MacKeychain(fake).is_strict(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT))
         self.assertFalse(fake.argv_contains(RT))
         for wrong in (ADMIN_TOKEN, NEW_TOKEN, RT + "x", "rt_short"):
             with self.assertRaises(KeychainError) as ctx:
-                register.store_register_token(Keychain(fake), wrong)
+                register.store_register_token(MacKeychain(fake), wrong)
             self.assertNotIn(wrong, str(ctx.exception))
 
     def test_token_only_goes_to_the_origin_it_was_bound_to(self):
         paths = temp_paths(self)
         configure(paths)
-        keychain = Keychain(FakeSecurity({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT}))
+        keychain = MacKeychain(FakeSecurity({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT}))
         with self.assertRaises(ValueError) as ctx:  # not bound yet
             register.RegisterApi.from_keychain(keychain, MOSHI, paths)
         self.assertIn("register-token set", str(ctx.exception))
@@ -295,7 +284,7 @@ class RegistrationTokenStorageTest(unittest.TestCase):
         configure(paths)
         fake = FakeSecurity()
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=Keychain(fake)), \
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(fake)), \
                 mock.patch("cockpit.cli.bots.ask_token", return_value=RT), \
                 mock.patch("sys.stdout") as out:
             self.assertEqual(cli.main(["bot", "register-token", "set"]), 0)
@@ -316,7 +305,7 @@ class RegistrationTokenStorageTest(unittest.TestCase):
             clipboard["text"] = input
             return mock.Mock(returncode=0, stdout="")
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=Keychain(fake)), \
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(fake)), \
                 mock.patch("cockpit.register.subprocess.run", side_effect=runner), \
                 mock.patch("cockpit.cli.bots.ask_token", side_effect=AssertionError("no prompt")), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr") as err:
@@ -352,7 +341,7 @@ class RegistrationTokenStorageTest(unittest.TestCase):
         def runner(args, input=None, **_kwargs):
             return mock.Mock(returncode=0, stdout=RT)
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=Keychain(fake)), \
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(fake)), \
                 mock.patch("cockpit.register.subprocess.run", side_effect=runner), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr") as err:
             self.assertEqual(cli.main(["bot", "register-token", "set", "--clipboard"]), 1)
@@ -365,7 +354,7 @@ class RegistrationTokenStorageTest(unittest.TestCase):
         paths = temp_paths(self)
         configure(paths)
         fake = FakeSecurity({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT})
-        ctx = doctor.DoctorContext(paths=paths, keychain=Keychain(fake), pins={})
+        ctx = doctor.DoctorContext(paths=paths, keychain=MacKeychain(fake), pins={})
         [unbound] = [c for c in doctor.check_identities(ctx) if c.name == "identity-register"]
         self.assertEqual(unbound.status, doctor.FAIL)
         bind_cockpit(paths, url="https://elsewhere.example.test/mcp", identity="register")
@@ -383,7 +372,7 @@ class RegistrationTokenStorageTest(unittest.TestCase):
         fake = FakeSecurity({(register.REGISTER_SERVICE, register.REGISTER_ACCOUNT): RT})
         bind_cockpit(paths, identity="register")
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=Keychain(fake)), mock.patch("sys.stdout"):
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(fake)), mock.patch("sys.stdout"):
             self.assertEqual(cli.main(["bot", "register-token", "remove"]), 0)
             self.assertEqual(cli.main(["bot", "register-token", "remove"]), 0)  # twice is fine
         self.assertNotIn((register.REGISTER_SERVICE, register.REGISTER_ACCOUNT), fake.entries)
@@ -496,8 +485,8 @@ class WizardTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def ctx(self, servers=None, agents=()):
-        configure(self.paths, servers=servers, agents=agents, person="anna")
-        return AgentContext(paths=self.paths, backup=BackupStore(self.paths.state), keychain=Keychain(FakeSecurity()))
+        configure(self.paths, servers=servers, agents=agents)
+        return AgentContext(paths=self.paths, backup=BackupStore(self.paths.state), keychain=MacKeychain(FakeSecurity()))
 
     def script(self, *answers):
         queue, said = list(answers), []

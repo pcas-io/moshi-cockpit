@@ -1,7 +1,7 @@
-"""moshi-cockpit's own settings: which servers exist, for whom the agents work.
+"""moshi-cockpit's own settings: which servers exist.
 
 ~/.config/moshi-cockpit/config.json:
-    {"person": "anna", "servers": {"moshi": "https://…/mcp", "ocellio": "https://…/mcp/"}}
+    {"servers": {"moshi": "https://…/mcp", "ocellio": "https://…/mcp/"}}
 
 Both servers are optional. Without moshi there is no mesh (no presence, inbox, registration); without
 ocellio no knowledge graph. Agents can still be created, started and resumed locally. Nothing about a
@@ -78,7 +78,6 @@ def read_private(path, what: str) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    person: Optional[str] = None
     servers: Dict[str, str] = field(default_factory=dict)
     # The person's own rules (rules.md), appended to every agent's working rules. The code ships none.
     rules: str = ""
@@ -106,7 +105,6 @@ def _read(paths: Paths) -> Dict:
 
 def load_config(paths: Paths) -> Config:
     """Fail-closed: a config that exists but is broken, or holds an invalid server URL, is an error."""
-    from cockpit.person import load_person  # person keeps its own validation and messages
     data = _read(paths)
     raw = data.get("servers") or {}
     if not isinstance(raw, dict):
@@ -118,7 +116,7 @@ def load_config(paths: Paths) -> Config:
     unknown = sorted(set(raw) - set(SERVERS))
     if unknown:
         raise ValueError(f"{paths.mesh_config}: unbekannte Server {unknown}")
-    return Config(person=load_person(paths), servers=servers, rules=load_rules(paths))
+    return Config(servers=servers, rules=load_rules(paths))
 
 
 def save_servers(paths: Paths, backup: BackupStore, servers: Dict[str, Optional[str]]) -> bool:

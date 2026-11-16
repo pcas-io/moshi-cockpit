@@ -13,7 +13,7 @@ from typing import Optional
 
 from cockpit.backup import BackupStore
 from cockpit.config import _read, origin
-from cockpit.keychain import Keychain
+from cockpit.secrets import SecretStore
 from cockpit.paths import COCKPIT_IDENTITY, Paths, keychain_service
 
 ADMIN = "admin"  # the binding key for the admin token (service moshi-admin, account admin)
@@ -43,7 +43,7 @@ def check(paths: Paths, identity: str, url: str) -> None:
                          f"kein Token gesendet. Absichtlich umgezogen? {hint} --rebind")
 
 
-def moshi_token(paths: Paths, keychain: Keychain, identity: str, url: str) -> str:
+def moshi_token(paths: Paths, keychain: SecretStore, identity: str, url: str) -> str:
     """The identity's moshi token, only for the origin it is bound to (fail-closed otherwise)."""
     check(paths, identity, url)
     if identity == ADMIN:

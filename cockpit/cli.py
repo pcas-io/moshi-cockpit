@@ -8,10 +8,10 @@ import sys
 from typing import List, Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, admin, agenttest, bots, connect, doctor, installer, launch, person, register, removal, sessions, status, wizard
+from cockpit import __version__, admin, agenttest, bots, connect, doctor, installer, launch, register, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
-from cockpit.keychain import Keychain, KeychainError
+from cockpit.secrets import KeychainError, default_store
 from cockpit.mcp import McpError
 from cockpit.config import SERVERS, load_config, origin, require, save_rules
 from cockpit.tokens import ADMIN, REGISTER, bind_identity
@@ -30,7 +30,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     inst = sub.add_parser("install", help="herdr prüfen/installieren, sichere Defaults, Agents einrichten")
     inst.add_argument("--skip-herdr", action="store_true", help="herdr weder prüfen noch installieren")
-    inst.add_argument("--person", help="für wen die Agents arbeiten; moshi-Namen werden <person>-<agent>")
     inst.add_argument("--moshi", metavar="URL", help="moshi-Server (https://…/mcp); leer (\"\") entfernt ihn. Optional")
     inst.add_argument("--ocellio", metavar="URL", help="ocellio-Server (https://…/mcp/); leer (\"\") entfernt ihn. Optional")
 
@@ -64,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     reg = bot_sub.add_parser("register-token", help="Registrier-Token: darf nur Agents anlegen (statt Admin-Token)")
     reg_sub = reg.add_subparsers(dest="register_command", required=True)
     reg_new = reg_sub.add_parser("new", help="ausstellen (Admin-Rechner); landet nur in der Zwischenablage")
-    reg_new.add_argument("--person", required=True, help="für wen; erlaubt nur moshi-Namen <person>-…")
+    reg_new.add_argument("--person", required=True, help="Name; erlaubt nur moshi-Namen <name>-…")
     reg_new.add_argument("--days", type=int, default=register.DEFAULT_DAYS,
                          help=f"gültig für N Tage (Standard {register.DEFAULT_DAYS}, höchstens {register.MAX_DAYS})")
     reg_new.add_argument("--max-per-hour", type=int, help="höchstens N neue Agents pro Stunde (Standard von moshi: 10)")
@@ -120,11 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _context(paths: Paths) -> AgentContext:
-    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=Keychain())
+    return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=default_store())
 
 
 def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
-    launch.run_agent(paths, Keychain(), args.agent, args.rest)
+    launch.run_agent(paths, default_store(), args.agent, args.rest)
     return 0  # not reached: exec
 
 
@@ -138,10 +137,6 @@ def _agent_names(paths: Paths) -> List[str]:
 
 def cmd_install(args: argparse.Namespace, paths: Paths) -> int:
     ctx = _context(paths)
-    if args.person:
-        changed = person.save_person(paths, ctx.backup, args.person)
-        who = person.load_person(paths)
-        print(f"• Person: {who} (moshi-Namen <{who}>-<agent>)" + ("" if changed else ", unverändert"))
     options = installer.InstallOptions(skip_herdr=args.skip_herdr, moshi=args.moshi, ocellio=args.ocellio)
     notes = installer.run(ctx, load_pins(), options)
     for note in notes:
@@ -164,7 +159,7 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace, paths: Paths) -> int:
-    ctx = doctor.DoctorContext(paths=paths, keychain=Keychain(), pins=load_pins())
+    ctx = doctor.DoctorContext(paths=paths, keychain=default_store(), pins=load_pins())
     results = doctor.run(ctx)
     if args.quiet:
         message = doctor.quiet(results)
@@ -177,7 +172,7 @@ def cmd_doctor(args: argparse.Namespace, paths: Paths) -> int:
 
 def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
     """Without moshi only the local agents (--json for the panel); with moshi the whole mesh."""
-    keychain = Keychain()
+    keychain = default_store()
     config = load_config(paths)
     local = status.local_agents(paths, config, keychain)
     result, identity = {}, ""
@@ -228,7 +223,7 @@ def cmd_bot(args: argparse.Namespace, paths: Paths) -> int:
         print(f"Das Admin-Token wird an {origin(url)} gebunden und nur dorthin gesendet.")
         token = bots.ask_token(bots.BotIO(), "moshi-Admin-Token einfügen (Eingabe unsichtbar): ")
         bound = bind_identity(paths, BackupStore(paths.state), ADMIN, url, rebind=args.rebind)
-        admin.store_admin_token(Keychain(), token)
+        admin.store_admin_token(default_store(), token)
         print(f"• {admin.ADMIN_SERVICE}: gespeichert und an {bound} gebunden, macOS fragt bei jedem Lesen nach")
         return 0
     if args.bot_command == "register-token":
@@ -241,10 +236,10 @@ def cmd_bot(args: argparse.Namespace, paths: Paths) -> int:
 
 def cmd_register_token(args: argparse.Namespace, paths: Paths) -> int:
     if args.register_command == "remove":  # works without a configured moshi, too
-        for note in register.forget_register_token(Keychain(), paths, BackupStore(paths.state)):
+        for note in register.forget_register_token(default_store(), paths, BackupStore(paths.state)):
             print(f"• {note}")
         return 0
-    url, keychain = _moshi(paths), Keychain()
+    url, keychain = _moshi(paths), default_store()
     if args.register_command == "set":
         print(f"Das Registrier-Token wird an {origin(url)} gebunden und nur dorthin gesendet.")
         if args.clipboard:
@@ -264,9 +259,6 @@ def cmd_register_token(args: argparse.Namespace, paths: Paths) -> int:
             print("• Zwischenablage geleert" if register.clear_clipboard(token) else
                   "• Zwischenablage NICHT geleert (inzwischen etwas anderes darin oder pbcopy fehlgeschlagen): "
                   "bitte selbst prüfen und leeren")
-        if not load_config(paths).person:
-            print("• Hinweis: Hier ist keine Person eingerichtet. moshi-Namen sind dann die Agent-Namen ohne Präfix, "
-                  "das Registrier-Token nimmt aber nur <person>-…. Setzen mit: moshi-cockpit install --person <name>")
         print("Neue Agents: moshi-cockpit agent add")
         return 0
     if not admin.has_admin_token(keychain):
@@ -363,7 +355,7 @@ def cmd_rules(args: argparse.Namespace, paths: Paths) -> int:
 def cmd_sessions(args: argparse.Namespace, paths: Paths) -> int:
     if bool(args.agent) == bool(args.harness):
         raise ValueError("Entweder einen Agent oder --harness angeben")
-    keychain = Keychain()
+    keychain = default_store()
     found = sessions.list_sessions(args.harness, paths, args.folder, args.limit) if args.harness else \
         sessions.for_agent(paths, args.agent, args.folder, args.limit,
                            lambda: Ctx(paths=paths, config=load_config(paths), keychain=keychain))
@@ -378,7 +370,7 @@ def cmd_sessions(args: argparse.Namespace, paths: Paths) -> int:
 
 def cmd_test(args: argparse.Namespace, paths: Paths) -> int:
     chosen = args.agents or [a.name for a in load_agents(paths) if a.harness in ("vibe", "agy", "codex")]
-    return agenttest.run(Keychain(), chosen, args.report_to, paths=paths)
+    return agenttest.run(default_store(), chosen, args.report_to, paths=paths)
 
 
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor,

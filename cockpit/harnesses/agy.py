@@ -10,7 +10,7 @@ from typing import Dict, List, Sequence
 from cockpit.approvals import agy_findings, agy_rule_grants_ask
 from cockpit.defaults import load_json
 from cockpit.harnesses.base import Ctx, Harness
-from cockpit.person import ALWAYS, ASK
+from cockpit.policy import ALWAYS, ASK
 from cockpit.registry import Agent
 
 

@@ -1,4 +1,4 @@
-"""Acceptance criteria for vendor-neutral agents (no agent CLI, person or server built in), one test each."""
+"""Acceptance criteria for vendor-neutral agents (no agent CLI or server built in), one test each."""
 
 import io
 import json
@@ -9,7 +9,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from cockpit import agents, bots, config, doctor, installer, launch, registry
-from cockpit.keychain import Keychain
+from cockpit.secrets.macos import MacKeychain
 from cockpit.pins import load_pins
 from tests.helpers import FOREIGN, MOSHI, OCELLIO, OWN, configure, context, start, temp_paths
 
@@ -264,7 +264,7 @@ class SingleInstanceRepairTest(unittest.TestCase):  # one-agent rule (agy): refu
         configure(ctx.paths, servers={}, agents=[{"name": "a1", "harness": "agy"}, {"name": "a2", "harness": "agy"},
                                                  {"name": "c1", "harness": "codex"}])
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
-                mock.patch("cockpit.cli.Keychain", return_value=ctx.keychain):  # no `security` on CI images
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain):  # no `security` on CI images
             with redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(cli.main(["status", "--json"]), 0)
             data = json.loads(out.getvalue())
@@ -384,14 +384,14 @@ class NoNetworkTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(socket.socket, "connect", refuse), \
                 mock.patch.object(socket, "create_connection", refuse), \
-                mock.patch("cockpit.keychain.Keychain.__init__", lambda self, *a, **k: None), \
-                mock.patch("cockpit.keychain.Keychain.exists", lambda *a, **k: False), \
+                mock.patch("cockpit.secrets.macos.MacKeychain.__init__", lambda self, *a, **k: None), \
+                mock.patch("cockpit.secrets.macos.MacKeychain.exists", lambda *a, **k: False), \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(cli.main(["agent", "add", "solo", "--harness", "vibe"]), 0)
             self.assertEqual(cli.main(["status", "--json"]), 0)
             self.assertEqual(cli.main(["agent", "list", "--json"]), 0)
             cli.main(["doctor", "--json"])
-            launch.command(paths, Keychain(), "solo", ["hi"])
+            launch.command(paths, MacKeychain(), "solo", ["hi"])
         self.assertEqual(attempts, [])
 
 
@@ -446,3 +446,23 @@ class OwnRulesTest(unittest.TestCase):  # the person's data rule must persist
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MoshiNameTest(unittest.TestCase):
+    def test_an_agents_moshi_name_equals_its_local_name(self):
+        from cockpit import status
+        from cockpit.harnesses import HARNESSES, Ctx
+        ctx, _ = context(self)
+        configure(ctx.paths, agents=[{"name": "research", "harness": "codex"}])
+        cfg = config.load_config(ctx.paths)
+        agent = registry.find(ctx.paths, "research")
+        self.assertEqual(HARNESSES["codex"].moshi_name(Ctx(paths=ctx.paths, config=cfg, keychain=ctx.keychain), agent),
+                         "research")
+        self.assertEqual(status.local_agents(ctx.paths, cfg, ctx.keychain)[0]["moshi_name"], "research")
+
+    def test_the_config_has_no_person(self):
+        ctx, _ = context(self)
+        configure(ctx.paths, agents=[])
+        self.assertFalse(hasattr(config.load_config(ctx.paths), "person"))
+        ctx.paths.mesh_config.write_text(json.dumps({"person": "anna", "servers": {"moshi": MOSHI}}))
+        self.assertEqual(config.load_config(ctx.paths).servers, {"moshi": MOSHI})  # a leftover key is ignored

@@ -6,7 +6,7 @@ from unittest import mock
 
 from cockpit import admin, bots, cli, connect, register, status, tokens
 from cockpit.config import load_config, origin, save_servers
-from cockpit.keychain import KeychainError
+from cockpit.secrets import KeychainError
 from cockpit.paths import keychain_service
 from cockpit.registry import Agent, save_agents
 from tests.helpers import MOSHI, OCELLIO, configure
@@ -208,7 +208,7 @@ class CommandLineTest(unittest.TestCase):
 
     def status(self):
         args = mock.Mock(identity=None, json=True)
-        with mock.patch.object(cli, "Keychain", return_value=self.ctx.keychain), mock.patch("builtins.print") as printed:
+        with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), mock.patch("builtins.print") as printed:
             code = cli.cmd_status(args, self.ctx.paths)
         return code, json.loads(printed.call_args.args[0])
 
@@ -260,7 +260,7 @@ class CommandLineTest(unittest.TestCase):
 
     def test_the_text_status_still_names_the_missing_token(self):
         args = mock.Mock(identity=None, json=False)
-        with mock.patch.object(cli, "Keychain", return_value=self.ctx.keychain), self.assertRaises(KeychainError) as caught:
+        with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), self.assertRaises(KeychainError) as caught:
             cli.cmd_status(args, self.ctx.paths)
         self.assertIn("moshi-Token", str(caught.exception))
 

@@ -15,7 +15,6 @@ from cockpit.agents import AgentContext
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES
 from cockpit.paths import Paths
-from cockpit.person import identity
 from cockpit.registry import Agent, load_agents, validate_name
 
 
@@ -145,7 +144,7 @@ def run(ctx: AgentContext, io: WizardIO = WizardIO(), name: Optional[str] = None
         return ["Starten: im „+“-Menü oder mit moshi-cockpit run " + name]
     config = load_config(ctx.paths)
     servers = " und ".join(s for s in ("moshi", "ocellio") if config.has(s))
-    moshi_name = f" (moshi-Name {identity(name, config.person)})" if config.has("moshi") else ""
+    moshi_name = f" (moshi-Name {name})" if config.has("moshi") else ""
     answer = io.ask(f"Jetzt bei {servers} anmelden{moshi_name}? [J/n] ").strip().lower()
     if answer in ("", "j", "ja", "y", "yes") and connect is not None:
         return connect(name)
