@@ -1,3 +1,4 @@
+import io
 import json
 import threading
 import unittest
@@ -115,10 +116,10 @@ class ErrorSanitizingTest(unittest.TestCase):
             headers = {"Content-Type": "application/json", "Mcp-Session-Id": "s"}
 
             def __init__(self, payload):
-                self._payload = payload
+                self._body = io.BytesIO(json.dumps(payload).encode())
 
-            def read(self):
-                return json.dumps(self._payload).encode()
+            def read(self, amt=-1):
+                return self._body.read(amt)
 
             def __enter__(self):
                 return self
