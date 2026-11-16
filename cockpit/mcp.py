@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from cockpit.moshi_api import no_redirect_opener
 from cockpit.paths import USER_AGENT
 from cockpit.text import clean
 
@@ -35,10 +36,11 @@ def parse_body(content_type: str, body: str) -> Dict[str, Any]:
 
 
 class McpClient:
-    def __init__(self, url: str, token: str, opener: Opener = urllib.request.urlopen, timeout: float = 20) -> None:
+    def __init__(self, url: str, token: str, opener: Optional[Opener] = None, timeout: float = 20) -> None:
+        """Without an `opener`, redirects are refused: urllib would forward the bearer to any origin."""
         self._url = url
         self._token = token
-        self._opener = opener
+        self._opener = opener or no_redirect_opener()
         self._timeout = timeout
         self._session: Optional[str] = None
         self._next_id = 1
@@ -94,6 +96,8 @@ class McpClient:
                 return response.status, parse_body(response.headers.get("Content-Type", ""), body)
         except urllib.error.HTTPError as exc:
             exc.close()  # the error holds the open response
+            if 300 <= exc.code < 400:
+                raise McpError(f"HTTP {exc.code} from {self._url}: redirect refused, not followed") from None
             raise McpError(f"HTTP {exc.code} von {self._url}") from None
         except urllib.error.URLError as exc:
             raise McpError(f"{self._url} nicht erreichbar ({exc.reason})") from None
