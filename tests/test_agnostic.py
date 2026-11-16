@@ -8,15 +8,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from cockpit import agents, config, doctor, installer, launch, registry
+from cockpit import agents, config, doctor, launch, registry
 from cockpit.secrets.macos import MacKeychain
-from tests.helpers import FOREIGN, MOSHI, OCELLIO, OWN, bind_non_agent, configure, context, herdr_app, start, temp_paths
-
-
-def install(ctx, **options):
-    """`install` on a Mac where Herdr.app is installed and ran before."""
-    herdr_app(ctx.paths)
-    return installer.run(ctx, installer.InstallOptions(**options))
+from tests.helpers import FOREIGN, MOSHI, OCELLIO, OWN, bind_non_agent, configure, context, install, start, temp_paths
 
 
 class OriginBindingTest(unittest.TestCase):

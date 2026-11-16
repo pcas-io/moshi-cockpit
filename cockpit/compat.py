@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import plistlib
-import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -19,6 +19,8 @@ from cockpit.paths import Paths
 TESTED_HERDR_APP = ("0.1.13",)
 TESTED_HERDR_CORE = ("0.1.18",)
 HERDR_URL = "https://herdr.dev"
+UNKNOWN = "unknown"  # the bundle is there, its version cannot be read
+MAX_VERSION = 40
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -31,7 +33,8 @@ class Finding:
 
 
 def check(app_version: Optional[str], core_version: Optional[str]) -> List[Finding]:
-    """Herdr.app must be there; any version of it or of herdr-core that was not tested only warns."""
+    """Herdr.app must be there (None: missing); any version of it or of herdr-core that was not tested, an
+    unusual or an unreadable one included, only warns."""
     if not app_version:
         return [Finding("herdr", FAIL, f"Herdr is not installed. Install it from {HERDR_URL}")]
     findings = [_judge("herdr", "Herdr", app_version, TESTED_HERDR_APP)]
@@ -43,12 +46,16 @@ def check(app_version: Optional[str], core_version: Optional[str]) -> List[Findi
 def _judge(name: str, label: str, version: str, tested: Sequence[str]) -> Finding:
     if version in tested:
         return Finding(name, OK, f"{label} {version} (tested)")
+    if version == UNKNOWN:
+        return Finding(name, WARN, f"{label} is installed, but its version is unknown (tested: {', '.join(tested)}). "
+                                   "It usually works; if something breaks, say which version you run")
     return Finding(name, WARN, f"{label} {version} was not tested with this release (tested: {', '.join(tested)}). "
                                "It usually works; if something breaks, say which version you run")
 
 
 def installed_versions(paths: Paths) -> Tuple[Optional[str], Optional[str]]:
-    """(Herdr.app, herdr-core) as their bundles state them; None where a bundle or its version is missing."""
+    """(Herdr.app, herdr-core) as their bundles state them: None where a bundle is missing, UNKNOWN where it
+    is there but its version cannot be read."""
     core = core_bundle(paths)
     return (bundle_version(paths.herdr_app_bundle),
             bundle_version(core) if core else None)
@@ -64,15 +71,21 @@ def core_bundle(paths: Paths) -> Optional[Path]:
 
 
 def bundle_version(bundle: Path) -> Optional[str]:
-    """'x.y.z' from the bundle's Info.plist, without following a link at Info.plist itself."""
+    """The bundle's CFBundleShortVersionString, without control characters and bounded, read without following a
+    link at Info.plist itself. None only when the bundle itself is missing."""
+    if not bundle.is_dir():
+        return None
     info = bundle / "Contents" / "Info.plist"
     if info.is_symlink() or not info.is_file():
-        return None
+        return UNKNOWN
     try:
         fd = os.open(info, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
             data = plistlib.load(handle)
     except (OSError, ValueError, plistlib.InvalidFileException):
-        return None
+        return UNKNOWN
     version = data.get("CFBundleShortVersionString") if isinstance(data, dict) else None
-    return version if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version) else None
+    if not isinstance(version, str):
+        return UNKNOWN
+    shown = "".join(ch for ch in version if not unicodedata.category(ch).startswith("C")).strip()[:MAX_VERSION]
+    return shown or UNKNOWN

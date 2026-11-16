@@ -139,11 +139,18 @@ def herdr_app(paths: Paths, version: str = "0.1.13", ran_before: bool = True) ->
     contents = paths.herdr_app_bundle / "Contents"
     contents.mkdir(parents=True, exist_ok=True)
     with (contents / "Info.plist").open("wb") as handle:
-        plistlib.dump({"CFBundleShortVersionString": version}, handle)
+        plistlib.dump({"CFBundleShortVersionString": version}, handle, fmt=plistlib.FMT_BINARY)
     if ran_before:
         layouts = paths.herdr_app_home / "layouts"
         layouts.mkdir(parents=True, exist_ok=True)
         (layouts / "main.json").write_text(json.dumps(MAIN_LAYOUT))
+
+
+def install(ctx, **options):
+    """`install` on a Mac where Herdr.app is installed and ran before."""
+    from cockpit import installer
+    herdr_app(ctx.paths)
+    return installer.run(ctx, installer.InstallOptions(**options))
 
 
 def bind_non_agent(paths: Paths, url: str = MOSHI, identity: str = "device") -> None:

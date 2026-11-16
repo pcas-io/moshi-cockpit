@@ -130,8 +130,14 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
     result, identity = {}, ""
     unconnected = connect.needs_connect(paths, config, keychain)
     if config.has("moshi") and not (args.json and unconnected):  # the panel then offers to connect, it gets no error
-        identity = status.pick_identity(keychain, args.identity, [a["name"] for a in local])
-        result = status.fetch_status(keychain, identity, config.server("moshi"), paths)
+        try:
+            identity = status.pick_identity(keychain, args.identity, [a["name"] for a in local])
+        except KeychainError:
+            if not args.json:
+                raise
+            # Connected, but no agent here holds a moshi token yet: the panel gets the local view, not an error.
+        if identity:
+            result = status.fetch_status(keychain, identity, config.server("moshi"), paths)
     if args.json:
         print(status.as_json(result, identity, local, {name: config.has(name) for name in SERVERS},
                              wizard.harness_offer(paths), status.problems(paths), unconnected))

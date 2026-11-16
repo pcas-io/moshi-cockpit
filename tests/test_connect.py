@@ -179,6 +179,15 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(data["identity"], "")
         self.assertEqual(data["agents"], [])
 
+    def test_after_connect_without_agents_the_panel_gets_the_local_view(self):
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)  # what a successful connect leaves
+        code, data = self.status()
+        self.assertEqual(code, 0)
+        self.assertIs(data["needs_connect"], False)
+        self.assertEqual(data["identity"], "")
+        self.assertEqual(data["agents"], [])
+        self.assertEqual(data["servers"], {"moshi": True, "ocellio": True})
+
     def test_the_payload_defaults_to_connected(self):
         self.assertIs(json.loads(status.as_json({}, "x"))["needs_connect"], False)
 

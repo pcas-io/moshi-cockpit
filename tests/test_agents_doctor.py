@@ -9,11 +9,11 @@ from contextlib import redirect_stderr
 from unittest import mock
 from pathlib import Path
 
-from cockpit import agents, cli, compat, defaults, doctor, installer, registry
+from cockpit import agents, cli, compat, defaults, doctor, registry
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
 from cockpit.secrets.macos import MacKeychain
-from tests.helpers import MOSHI, OCELLIO, FakeSecurity, bind_non_agent, configure, herdr_app, temp_paths
+from tests.helpers import MOSHI, OCELLIO, FakeSecurity, bind_non_agent, configure, herdr_app, install, temp_paths
 
 OC, MO = "oc_TOKEN_aaaaaaaa", "bt_TOKEN_bbbbbbbb"
 
@@ -301,6 +301,19 @@ class DefaultsDoctorTest(unittest.TestCase):
 
 
 class AgentCommandTest(unittest.TestCase):
+    def test_add_with_the_panels_connect_flag_says_it_is_not_connected(self):
+        import io as _io
+        from contextlib import redirect_stdout
+        paths = temp_paths(self)
+        configure(paths)  # moshi and ocellio configured
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())), \
+                mock.patch("cockpit.harnesses.base.Harness.installed", return_value=True), \
+                redirect_stdout(_io.StringIO()) as out:
+            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "codex", "--connect"]), 0)
+        self.assertIn("! x is not connected to the servers", out.getvalue())
+        self.assertEqual([a.name for a in registry.load_agents(paths)], ["x"])
+
     def test_add_list_remove_and_rules(self):
         import io as _io
         from contextlib import redirect_stdout
@@ -321,12 +334,6 @@ class AgentCommandTest(unittest.TestCase):
             with redirect_stdout(_io.StringIO()):
                 self.assertEqual(cli.main(["agent", "remove", "ag1"]), 0)
             self.assertEqual([a.name for a in registry.load_agents(paths)], ["research"])
-
-
-def install(ctx, **options):
-    """`install` on a Mac where Herdr.app is installed and ran before."""
-    herdr_app(ctx.paths)
-    return installer.run(ctx, installer.InstallOptions(**options))
 
 
 class InstallerTest(unittest.TestCase):
@@ -415,6 +422,24 @@ class HerdrFromTheVendorTest(unittest.TestCase):
         results = doctor.check_herdr(self.doctor(ctx, None, "0.1.18"))
         self.assertEqual([(r.name, r.status) for r in results], [("herdr", doctor.FAIL)])
         self.assertIn("https://herdr.dev", doctor.quiet(results))
+
+    def test_an_installed_herdr_with_an_odd_or_unreadable_version_only_warns(self):
+        ctx, _ = context(self)
+        for version, shown in (("0.2", "0.2"), ("1.0.0-rc1", "1.0.0-rc1"), ("0.2\x1b[2J", "0.2[2J"), ("", "unknown")):
+            with self.subTest(version=version):
+                herdr_app(ctx.paths, version=version, ran_before=False)
+                self.assertEqual(compat.installed_versions(ctx.paths), (shown, None))
+        (ctx.paths.herdr_app_bundle / "Contents" / "Info.plist").unlink()
+        self.assertEqual(compat.installed_versions(ctx.paths), ("unknown", None))
+        (ctx.paths.herdr_app_bundle / "Contents" / "Info.plist").write_text("broken")
+        self.assertEqual(compat.installed_versions(ctx.paths), ("unknown", None))
+        results = doctor.check_herdr(doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain))
+        self.assertEqual([(r.name, r.status) for r in results], [("herdr", doctor.WARN)])
+        self.assertIn("unknown", results[0].detail)
+        self.assertEqual(doctor.exit_code(results), 0)
+        import shutil
+        shutil.rmtree(ctx.paths.herdr_app_bundle)  # only a missing bundle is an error
+        self.assertEqual(compat.installed_versions(ctx.paths), (None, None))
 
     def test_compat_reads_the_versions_from_the_bundles(self):
         ctx, _ = context(self)
