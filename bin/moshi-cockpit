@@ -1,0 +1,15 @@
+#!/bin/sh
+# moshi-cockpit: Einstieg. Löst den Symlink in ~/.local/bin auf und startet das Python-Paket
+# isoliert (-I: kein PYTHONPATH, kein cwd im Suchpfad).
+set -eu
+self=$(readlink -f "$0")
+root=$(cd "$(dirname "$self")/.." && pwd)
+# Installed by the release installer: the pinned Python, but only for a release in exactly that place (never next to a checkout).
+data=$(cd "${HOME:-/nonexistent}/.local/share/moshi-cockpit" 2>/dev/null && pwd -P) || data=""
+if [ -z "${MOSHI_COCKPIT_PYTHON:-}" ] && [ -n "$data" ] && [ "$(dirname "$root")" = "$data/app" ] \
+    && [ -x "$data/runtime/python/bin/python3" ]; then
+  MOSHI_COCKPIT_PYTHON="$data/runtime/python/bin/python3"
+fi
+exec "${MOSHI_COCKPIT_PYTHON:-python3}" -I -c \
+  'import sys; sys.path.insert(0, sys.argv[1]); from cockpit.cli import main; sys.exit(main(sys.argv[2:]))' \
+  "$root" "$@"

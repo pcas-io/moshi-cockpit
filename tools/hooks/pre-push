@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs every local check before a push. Enable once per clone: git config core.hooksPath tools/hooks
+set -eu
+exec sh "$(git rev-parse --show-toplevel)/tools/check.sh"

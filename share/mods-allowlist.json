@@ -1,0 +1,4 @@
+{
+  "_comment": "Zusätzlich erlaubte herdr-Mods (Ordnernamen in <app-home>/mods). Die von herdr mitgelieferten Mods stehen in <app-home>/installed.json und gelten automatisch als bekannt. Alles andere meldet `doctor` als unbekannt. Unsere eigenen Mods liegen in share/herdr-mods/.",
+  "allowed": ["moshi", "mesh-new-menu", "mesh-tabs", "mesh-agents"]
+}

@@ -1,0 +1,205 @@
+"""tools/leak_check.py: the guard that keeps internal ids, private emails and blocked words out of the repo.
+
+Test inputs that would trip the guard on this very file are assembled at runtime, so the file stays clean.
+The blocked words here are made up; the real list lives outside the repo.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import subprocess
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from typing import Dict, List
+
+TOOL = Path(__file__).resolve().parent.parent / "tools" / "leak_check.py"
+_spec = importlib.util.spec_from_file_location("leak_check", TOOL)
+leak_check = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(leak_check)
+
+WORD = "zebracornia"  # stands in for an entry of the private word list
+HOST = "quux" + "corp.example"  # a dotted entry
+WORDS = frozenset({WORD, HOST})
+SHORT_ID = "06a" + "1b2c3"
+UUID7 = "0190a1b2-c3d4-7" + "e5f-8a9b-0c1d2e3f4a5b"
+PRIVATE_EMAIL = "dev" + "@" + "corp-mail.de"
+HASH = "#"
+
+
+class FakeGit:
+    """Answers the two git questions the guard asks: which files, and what each commit says."""
+
+    def __init__(self, commits: Dict[str, str] = None) -> None:
+        self.commits = dict(commits or {})
+        self.calls: List[List[str]] = []
+
+    def __call__(self, args: List[str], cwd: Path) -> str:
+        self.calls.append(list(args))
+        if args[0] == "ls-files":
+            return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+        if args[0] == "rev-list":
+            return "".join(f"{sha}\n" for sha in self.commits)
+        if args[0] == "show":
+            return self.commits[args[-1]]
+        raise AssertionError(args)
+
+
+def rules(line: str) -> List[str]:
+    return leak_check.scan_line(line, WORDS)
+
+
+class LeakCheckTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+
+    def write(self, name: str, text: str) -> Path:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def run_guard(self, argv=None, git=None):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = leak_check.main(argv or [], words=WORDS, cwd=self.root, git=git or FakeGit())
+        return code, out.getvalue()
+
+    def test_leak_check_flags_an_ocellio_id(self):
+        self.write("a.py", f"x = 1\n# see {SHORT_ID}\n")
+        self.write("docs/b.md", f"id {UUID7}\n")
+        code, out = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("a.py:2: ocellio-id", out)
+        self.assertIn("docs/b.md:1: ocellio-id", out)
+        self.assertNotIn(SHORT_ID, out)
+
+    def test_an_eight_hex_token_is_an_id_only_next_to_an_id_word(self):
+        short = "c0ffee42"  # made up
+        for line in (f"Refs: {short}", f"Ref: {short}", f"ocellio entity {short}", f"id: {short}", f"Closes {short}"):
+            with self.subTest(line=line):
+                self.assertEqual(rules(line), ["ocellio-id"])
+        for line in (f"fixed in {short} yesterday", "git show " + "5eed1e5" + "a", "id: 12345678", "Refs: deadbeef0",
+                     f"identity {short}", f"prefs {short}", f"the entity_{short}"):
+            with self.subTest(line=line):
+                self.assertEqual(rules(line), [])
+
+    def test_leak_check_flags_a_blocked_word_and_prints_only_the_rule(self):
+        self.write("a.txt", "fine\n")
+        self.write("b.txt", f"ok\nAgent {WORD.capitalize()}-codex at mcp.{WORD}.example now.\n")
+        self.write("c.txt", f"host {WORD}.\n")
+        code, out = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), ["b.txt:2: blocked-word", "c.txt:1: blocked-word"])
+        self.assertNotIn(WORD, out.lower())
+
+    def test_every_run_of_atoms_counts(self):
+        for text in (f"https://api.{WORD}/x", f"{WORD}-labs", f"svc.{WORD}.internal", f"x-{WORD}",
+                     f"my-{WORD}-agent", f"api-{HOST}", f"https://mcp.{HOST}/v1", f"{HOST}-backup"):
+            with self.subTest(text=text):
+                self.assertEqual(rules(text), ["blocked-word"])
+        self.assertEqual(rules(f"{WORD}x and x{WORD} and {HOST[:4]}-{HOST[4:]}"), [])
+
+    def test_camel_case_compounds_are_split(self):
+        camel = WORD.capitalize()
+        for text in (f"{camel}Agent", f"new{camel}", f"the{camel}Bot runs", f"{WORD.upper()}Client",
+                     f"v2{camel}", f"HTTP{camel}Api"):
+            with self.subTest(text=text):
+                self.assertEqual(rules(text), ["blocked-word"])
+
+    def test_issue_references_are_flagged(self):
+        for line in (f"see moshi{HASH}4242", f"fixed in PR {HASH}9001", f"pr{HASH}777", f"issue {HASH}31337",
+                     f"acme/tool{HASH}808", f"Closes {HASH}606", f"(moshi {HASH}4242 not deployed)"):
+            with self.subTest(line=line):
+                self.assertEqual(rules(line), ["issue-ref"])
+        for line in ("color: #000000;", 'fill="#123"', "echo $#", "# 1. step", "x = a[#1]", "#!/bin/sh",
+                     "  #4711 in the list", "#1a2b3c"):
+            with self.subTest(line=line):
+                self.assertEqual(rules(line), [])
+
+    def test_decision_codes_are_flagged(self):
+        for line in ("residual risk " + "77", "(Restrisiko " + "88)", "WP-" + "999 says", "see the A" + "DR"):
+            with self.subTest(line=line):
+                self.assertEqual(rules(line), ["decision-code"])
+        for line in ("Q", "QA team", "planned for Q3 2026", "a quick win", "adr", "residual risk is low", "WP-x"):
+            with self.subTest(line=line):
+                self.assertEqual(rules(line), [])
+
+    def test_leak_check_allows_example_test_and_noreply_emails(self):
+        allowed = ["a@example.test", "b@example.invalid", "cosrv@users.noreply.github.com", "noreply@anthropic.com"]
+        self.write("ok.md", "\n".join(f"mail {mail}" for mail in allowed) + "\n")
+        self.assertEqual(self.run_guard(), (0, ""))
+        self.write("bad.md", f"write to {PRIVATE_EMAIL}\n")
+        code, out = self.run_guard()
+        self.assertEqual((code, out), (1, "bad.md:1: email\n"))
+
+    def test_leak_check_flags_a_blocked_word_in_a_commit_message_and_a_private_author_email(self):
+        clean = "cosrv\ncosrv@users.noreply.github.com\ncosrv\ncosrv@users.noreply.github.com\nchore: initial import\n"
+        dirty = (f"cosrv\n{PRIVATE_EMAIL}\ncosrv\ncosrv@users.noreply.github.com\n"
+                 f"feat: talk to {WORD}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
+        git = FakeGit({"a" * 40: clean, "b" * 40: dirty})
+        code, out = self.run_guard(["--commits", "origin/main..HEAD"], git=git)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), [f"commit {'b' * 12}:2: email", f"commit {'b' * 12}:5: blocked-word"])
+        self.assertIn(["rev-list", "origin/main..HEAD"], git.calls)
+        self.assertIn(["show", "-s", "--format=%an%n%ae%n%cn%n%ce%n%B", "b" * 40], git.calls)
+
+    def test_leak_check_passes_a_clean_tree(self):
+        self.write("README.md", "# moshi-cockpit\n\nPlain text, no ids, mail a@example.test.\n")
+        self.write("tools/x.py", "SHA = '" + "06a" + "0" * 61 + "'\n")
+        self.write("ignored.log", f"{WORD}\n")
+        self.write(".gitignore", "*.log\n")
+        self.assertEqual(self.run_guard(), (0, ""))
+
+    def test_file_names_are_scanned_and_redacted(self):
+        self.write(f"share/{WORD}/a.txt", f"fine\n{SHORT_ID}\n")
+        code, out = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), ["share/***/a.txt:0: blocked-word", "share/***/a.txt:2: ocellio-id"])
+
+
+class WordListTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_the_list_is_read_from_the_environment_lower_cased_with_comments(self):
+        path = self.dir / "words.txt"
+        path.write_text(f"# private\n{WORD.upper()}\n\n  {HOST}  \n")
+        self.assertEqual(leak_check.load_words({"MOSHI_COCKPIT_BLOCKED_WORDS": str(path)}), WORDS)
+
+    def test_the_default_list_sits_in_the_home_config(self):
+        path = self.dir / ".config" / "moshi-cockpit-dev" / "blocked-words.txt"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"{WORD}\n")
+        self.assertEqual(leak_check.load_words({"HOME": str(self.dir)}), frozenset({WORD}))
+
+    def test_a_missing_or_empty_list_fails_closed(self):
+        empty = self.dir / "empty.txt"
+        empty.write_text("# only a comment\n\n")
+        for target in (self.dir / "missing.txt", empty):
+            with self.subTest(target=target.name):
+                err = io.StringIO()
+                with redirect_stderr(err), redirect_stdout(io.StringIO()) as out:
+                    code = leak_check.main([], env={"MOSHI_COCKPIT_BLOCKED_WORDS": str(target)}, cwd=self.dir)
+                self.assertEqual(code, 2)
+                self.assertEqual(err.getvalue(),
+                                 "leak_check: private word list not found (set MOSHI_COCKPIT_BLOCKED_WORDS)\n")
+                self.assertEqual(out.getvalue(), "")
+
+    def test_the_repository_contains_no_word_list(self):
+        source = TOOL.read_text()
+        self.assertFalse(hasattr(leak_check, "BLOCKED_SHA256"))
+        self.assertFalse(hasattr(leak_check, "BLOCKED"))
+        self.assertNotRegex(source, r"[0-9a-f]{64}")  # no hash list either
+        self.assertNotIn("--hash", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
