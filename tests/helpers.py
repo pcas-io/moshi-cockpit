@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import plistlib
 import re
 import subprocess
 import tempfile
@@ -125,8 +127,34 @@ def configure(paths: Paths, servers=None, agents=(), bind=True) -> None:
         _os.chmod(f, 0o600)
 
 
-def bind_cockpit(paths: Paths, url: str = MOSHI, identity: str = "cockpit") -> None:
-    """Binds a non-agent identity (cockpit, admin) in an existing test config, as `bot add` would."""
+# herdr's own `main` layout, as Herdr writes it at its first start.
+MAIN_LAYOUT = {"id": "root", "type": "row", "children": [
+    {"id": "sidebar", "type": "column", "children": [{"id": "agents", "content": {"mod": "agents"}}]},
+    {"id": "work", "type": "column", "children": [{"id": "main", "content": {"tab": "active"}}]}]}
+
+
+def herdr_app(paths: Paths, version: str = "0.1.13", ran_before: bool = True) -> None:
+    """A Herdr.app as the vendor installs it, in the temp Applications folder. ran_before writes Herdr's own
+    main layout, so the installer has no reason to start it (no test ever opens an app)."""
+    contents = paths.herdr_app_bundle / "Contents"
+    contents.mkdir(parents=True, exist_ok=True)
+    with (contents / "Info.plist").open("wb") as handle:
+        plistlib.dump({"CFBundleShortVersionString": version}, handle, fmt=plistlib.FMT_BINARY)
+    if ran_before:
+        layouts = paths.herdr_app_home / "layouts"
+        layouts.mkdir(parents=True, exist_ok=True)
+        (layouts / "main.json").write_text(json.dumps(MAIN_LAYOUT))
+
+
+def install(ctx, **options):
+    """`install` on a Mac where Herdr.app is installed and ran before."""
+    from cockpit import installer
+    herdr_app(ctx.paths)
+    return installer.run(ctx, installer.InstallOptions(**options))
+
+
+def bind_non_agent(paths: Paths, url: str = MOSHI, identity: str = "device") -> None:
+    """Binds a non-agent identity (device, register) in an existing test config, as `connect` does."""
     import json as _json
     from cockpit.config import origin
     data = _json.loads(paths.mesh_config.read_text())

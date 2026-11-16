@@ -4,7 +4,7 @@ import re
 import unittest
 from unittest import mock
 
-from cockpit import approvals, bots, launch, policy
+from cockpit import approvals, launch, policy
 from cockpit.agents import AgentContext
 from cockpit.config import Config
 from cockpit.presence import presence_text
@@ -43,20 +43,6 @@ class PresenceTest(unittest.TestCase):
         words = leak_check.load_words(os.environ) or frozenset({"-"})
         for line in (both + alone).splitlines():
             self.assertEqual(leak_check.scan_line(line, words), [], line)
-
-    def test_bot_add_creates_the_plain_agent_name_in_moshi(self):
-        ctx = ctx_for(self, {("moshi-admin", "admin"): "bt_ADMIN_token_1234567890"})
-        configure(ctx.paths, agents=[{"name": "vibe", "harness": "vibe"}])
-        created = []
-
-        class Api:
-            def create_agent(self, name):
-                created.append(name)
-                return {"id": "01X", "name": name}, "bt_NEWTOKEN_1234567890"
-        io = bots.BotIO(ask_secret=lambda _p: "oc_PERSONTOKEN_12345678", open_url=lambda _u: True,
-                        say=lambda _m: None, admin_api=Api)
-        bots.add("vibe", ctx, io)
-        self.assertEqual(created, ["vibe"])
 
 
 class ApprovalTest(unittest.TestCase):
@@ -99,9 +85,8 @@ class ApprovalTest(unittest.TestCase):
         for value in ("secret_yolo_123", "bt_bypass_456789", "always"):
             self.assertNotIn(value, out)
         from cockpit import doctor
-        from cockpit.pins import load_pins
-        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, pins=load_pins(),
-                                    probe=lambda _u: (401, "Bearer"), core_version=lambda _p: None)
+        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, probe=lambda _u: (401, "Bearer"),
+                                    herdr_versions=lambda _p: (None, None))
         for as_json in (False, True):
             rendered = doctor.render(doctor.run(dctx), as_json=as_json)
             self.assertIn("apiKey", rendered)  # the agy check really ran and reported the setting

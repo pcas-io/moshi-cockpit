@@ -4,7 +4,7 @@ import json
 import unittest
 from unittest import mock
 
-from cockpit import admin, bots, cli, connect, register, status, tokens
+from cockpit import cli, connect, status, tokens
 from cockpit.config import load_config, origin, save_servers
 from cockpit.secrets import KeychainError
 from cockpit.paths import keychain_service
@@ -14,6 +14,8 @@ from tests.test_agents_doctor import context
 
 RT = "rt_" + "a" * 26 + "_" + "b" * 43
 OCELLIO_TOKEN = "ocellio-token-1234"
+REGISTER_ENTRY = ("moshi-register", "register")
+OCELLIO_ENTRY = ("ocellio-default", "default")
 
 
 class ConnectTest(unittest.TestCase):
@@ -32,30 +34,28 @@ class ConnectTest(unittest.TestCase):
         return connect.ConnectIO(ask_secret=ask, say=self.said.append)
 
     def run_connect(self, *values):
-        with mock.patch.object(bots, "add", return_value=["cockpit angelegt"]) as add:
-            notes = connect.run(self.ctx, self.answers(*values))
-        self.add = add
-        return notes
+        return connect.run(self.ctx, self.answers(*values))
 
     def exists(self, service, account):
         return self.ctx.keychain.exists(service, account)
 
     def test_it_says_what_it_needs_and_asks_hidden_one_after_the_other(self):
         self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertIn("zwei Tokens", self.said[0])
-        self.assertIn("Admin", self.said[0])
-        self.assertIn("ocellio-Konto", self.said[0])
+        self.assertIn("two tokens", self.said[0])
+        self.assertIn("ocellio account", self.said[0])
         self.assertEqual(len(self.prompts), 2)
-        self.assertIn("Registrier-Token", self.prompts[0])
-        self.assertIn("ocellio-Token", self.prompts[1])
-        self.assertTrue(all("unsichtbar" in p for p in self.prompts))
+        self.assertIn("registration token", self.prompts[0])
+        self.assertIn("ocellio token", self.prompts[1])
+        self.assertTrue(all("hidden" in p for p in self.prompts))
 
     def test_tokens_land_in_the_keychain_bound_to_their_servers(self):
         self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertTrue(register.has_register_token(self.ctx.keychain))
-        self.assertTrue(self.exists("ocellio-cockpit", "cockpit"))
+        self.assertEqual(self.fake.entries[REGISTER_ENTRY], RT)
+        self.assertTrue(self.ctx.keychain.is_strict(*REGISTER_ENTRY))  # macOS asks on every read
+        self.assertEqual(self.fake.entries[OCELLIO_ENTRY], OCELLIO_TOKEN)
         self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.REGISTER), origin(MOSHI))
-        self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.COCKPIT_OCELLIO), origin(OCELLIO))
+        self.assertEqual(tokens.bound_origin(self.ctx.paths, tokens.OCELLIO_DEFAULT), origin(OCELLIO))
+        self.assertFalse(self.fake.argv_contains(RT) or self.fake.argv_contains(OCELLIO_TOKEN))
 
     def test_no_token_is_ever_shown(self):
         notes = self.run_connect(RT, OCELLIO_TOKEN)
@@ -63,20 +63,20 @@ class ConnectTest(unittest.TestCase):
         self.assertNotIn(RT, text)
         self.assertNotIn(OCELLIO_TOKEN, text)
 
-    def test_it_creates_the_cockpit_identity_last(self):
+    def test_it_creates_no_moshi_identity_of_its_own(self):
         self.run_connect(RT, OCELLIO_TOKEN)
-        self.add.assert_called_once()
-        self.assertEqual(self.add.call_args.args[0], "cockpit")
+        self.assertEqual(set(self.fake.entries), {REGISTER_ENTRY, OCELLIO_ENTRY})
+        self.assertNotIn("cockpit", json.loads(self.ctx.paths.mesh_config.read_text())["bound"])
 
     def test_an_agent_token_is_refused_and_asked_again(self):
         self.run_connect("agent-token-12345", RT, OCELLIO_TOKEN)
         self.assertEqual(len(self.prompts), 3)
-        self.assertTrue(any("kein Registrier-Token" in s for s in self.said))
+        self.assertTrue(any("not a registration token" in s for s in self.said))
 
     def test_it_gives_up_after_three_wrong_tokens(self):
         with self.assertRaises(ValueError):
             self.run_connect(*["agent-token-12345"] * 3)
-        self.assertFalse(register.has_register_token(self.ctx.keychain))
+        self.assertFalse(self.exists(*REGISTER_ENTRY))
 
     def test_three_wrong_tokens_are_three_questions_not_nine(self):
         with self.assertRaises(ValueError):
@@ -87,35 +87,18 @@ class ConnectTest(unittest.TestCase):
         tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.REGISTER, "https://other.example/mcp")
         with self.assertRaises(ValueError):
             self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertFalse(register.has_register_token(self.ctx.keychain))
+        self.assertFalse(self.exists(*REGISTER_ENTRY))
 
     def test_a_token_for_another_ocellio_is_never_stored(self):
-        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.COCKPIT_OCELLIO, "https://other.example/mcp/")
+        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.OCELLIO_DEFAULT, "https://other.example/mcp/")
         with self.assertRaises(ValueError):
             self.run_connect(RT, OCELLIO_TOKEN)
-        self.assertFalse(self.exists("ocellio-cockpit", "cockpit"))
+        self.assertFalse(self.exists(*OCELLIO_ENTRY))
 
     def test_what_is_stored_is_said_before_a_later_failure(self):
-        with mock.patch.object(bots, "add", side_effect=admin.AdminError("weg")), self.assertRaises(admin.AdminError):
-            connect.run(self.ctx, self.answers(RT, OCELLIO_TOKEN))
+        with self.assertRaises(ValueError):
+            self.run_connect(RT, "x", "x", "x")
         self.assertTrue(any("moshi-register" in s for s in self.said))
-        self.assertTrue(any("ocellio-cockpit" in s for s in self.said))
-
-    def test_a_taken_name_warns_against_resetting_the_token(self):
-        taken = admin.AdminError(admin.NAME_TAKEN, "name_taken", 409)
-        with mock.patch.object(bots, "add", side_effect=taken), self.assertRaises(admin.AdminError) as caught:
-            connect.run(self.ctx, self.answers(RT, OCELLIO_TOKEN))
-        self.assertIn("nicht zurück", str(caught.exception))
-        self.assertTrue(str(caught.exception).endswith("."))
-        self.assertNotIn("später", str(caught.exception))
-        self.assertIn("cockpit", str(caught.exception))
-        self.assertEqual(caught.exception.status, 409)
-
-    def test_other_moshi_errors_stay_as_they_are(self):
-        with mock.patch.object(bots, "add", side_effect=admin.AdminError("gesperrt", "forbidden", 403)), \
-                self.assertRaises(admin.AdminError) as caught:
-            connect.run(self.ctx, self.answers(RT, OCELLIO_TOKEN))
-        self.assertEqual(str(caught.exception), "gesperrt")
 
     def test_an_interrupted_run_only_asks_for_what_is_missing(self):
         with self.assertRaises(ValueError):
@@ -124,14 +107,15 @@ class ConnectTest(unittest.TestCase):
         self.run_connect(OCELLIO_TOKEN)
         self.assertEqual(len(self.prompts), 1)
         self.assertIn("ocellio", self.prompts[0])
-        self.assertIn("noch", self.said[0])
+        self.assertIn("still", self.said[0])
 
     def test_nothing_is_asked_when_everything_is_there(self):
         self.run_connect(RT, OCELLIO_TOKEN)
         self.said.clear()
-        self.run_connect()
+        notes = self.run_connect()
         self.assertEqual(self.prompts, [])
         self.assertEqual(self.said, [])
+        self.assertIn("nothing to do", notes[0])
 
     def test_without_ocellio_only_moshi_is_asked(self):
         save_servers(self.ctx.paths, self.ctx.backup, {"ocellio": ""})
@@ -143,30 +127,6 @@ class ConnectTest(unittest.TestCase):
         save_servers(self.ctx.paths, self.ctx.backup, {"moshi": ""})
         with self.assertRaises(ValueError):
             connect.run(self.ctx, self.answers())
-
-
-class FirstAgentTest(unittest.TestCase):
-    """The point of the ocellio token: the first "+ Agent" needs no further question."""
-
-    def setUp(self):
-        self.ctx, self.fake = context(self)
-        configure(self.ctx.paths)
-        self.config = load_config(self.ctx.paths)
-
-    def store(self, url=OCELLIO):
-        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.COCKPIT_OCELLIO, url)
-        self.ctx.keychain.write("ocellio-cockpit", "cockpit", OCELLIO_TOKEN)
-
-    def test_a_new_agent_copies_the_token_from_connect(self):
-        self.store()
-        self.assertEqual(bots._person_ocellio_token("research", self.ctx, self.config), (OCELLIO_TOKEN, False))
-
-    def test_the_copy_only_goes_to_the_server_it_was_bound_to(self):
-        self.store("https://other.example/mcp/")
-        self.assertIsNone(bots._person_ocellio_token("research", self.ctx, self.config))
-
-    def test_without_connect_there_is_nothing_to_copy(self):
-        self.assertIsNone(bots._person_ocellio_token("research", self.ctx, self.config))
 
 
 class NeedsConnectTest(unittest.TestCase):
@@ -183,10 +143,10 @@ class NeedsConnectTest(unittest.TestCase):
     def test_without_moshi_the_cockpit_stays_local_and_silent(self):
         self.assertFalse(self.needs())
 
-    def test_the_cockpit_identity_ends_it(self):
+    def test_a_former_cockpit_identity_does_not_count(self):
         configure(self.ctx.paths)
         self.ctx.keychain.write(keychain_service("moshi", "cockpit"), "cockpit", "moshi-token-1234")
-        self.assertFalse(self.needs())
+        self.assertTrue(self.needs())
 
     def test_an_existing_agent_identity_ends_it(self):
         configure(self.ctx.paths)
@@ -195,10 +155,10 @@ class NeedsConnectTest(unittest.TestCase):
         self.ctx.keychain.write(keychain_service("moshi", "research"), "research", "moshi-token-1234")
         self.assertFalse(self.needs())
 
-    def test_a_stored_registration_token_alone_is_not_connected_yet(self):
+    def test_a_stored_registration_token_ends_it(self):
         configure(self.ctx.paths)
-        register.store_register_token(self.ctx.keychain, RT)
-        self.assertTrue(self.needs())
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
+        self.assertFalse(self.needs())
 
 
 class CommandLineTest(unittest.TestCase):
@@ -219,6 +179,15 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(data["identity"], "")
         self.assertEqual(data["agents"], [])
 
+    def test_after_connect_without_agents_the_panel_gets_the_local_view(self):
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)  # what a successful connect leaves
+        code, data = self.status()
+        self.assertEqual(code, 0)
+        self.assertIs(data["needs_connect"], False)
+        self.assertEqual(data["identity"], "")
+        self.assertEqual(data["agents"], [])
+        self.assertEqual(data["servers"], {"moshi": True, "ocellio": True})
+
     def test_the_payload_defaults_to_connected(self):
         self.assertIs(json.loads(status.as_json({}, "x"))["needs_connect"], False)
 
@@ -236,33 +205,28 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("+ Agent", text)
 
     def test_a_failure_stays_readable_until_enter(self):
-        code, text, held = self.run_connect(error=ValueError("Name vergeben"), tty=True)
+        code, text, held = self.run_connect(error=ValueError("Name taken"), tty=True)
         self.assertEqual(code, 1)
-        self.assertIn("Name vergeben", text)
+        self.assertIn("Name taken", text)
         held.assert_called_once()
 
     def test_a_network_error_is_a_plain_failure(self):
-        code, text, _ = self.run_connect(error=OSError("Netz weg"))
+        code, text, _ = self.run_connect(error=OSError("network down"))
         self.assertEqual(code, 1)
-        self.assertIn("Netz weg", text)
+        self.assertIn("network down", text)
 
     def test_a_failure_says_that_stored_tokens_stay(self):
-        register.store_register_token(self.ctx.keychain, RT)
+        self.ctx.keychain.write(*REGISTER_ENTRY, RT, strict=True)
         self.assertIn(connect.KEPT, self.run_connect(error=ValueError("x"))[1])
 
     def test_with_nothing_stored_it_promises_nothing(self):
         self.assertNotIn(connect.KEPT, self.run_connect(error=ValueError("x"))[1])
 
-    def test_a_taken_name_is_not_worth_another_try(self):
-        register.store_register_token(self.ctx.keychain, RT)
-        taken = admin.AdminError("vergeben", "name_taken", 409)
-        self.assertNotIn(connect.KEPT, self.run_connect(error=taken)[1])
-
     def test_the_text_status_still_names_the_missing_token(self):
         args = mock.Mock(identity=None, json=False)
         with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), self.assertRaises(KeychainError) as caught:
             cli.cmd_status(args, self.ctx.paths)
-        self.assertIn("moshi-Token", str(caught.exception))
+        self.assertIn("moshi token", str(caught.exception))
 
     def test_without_a_terminal_nothing_waits(self):
         _, _, held = self.run_connect()

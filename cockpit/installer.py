@@ -1,4 +1,8 @@
-"""`moshi-cockpit install`: idempotent; every file change goes through BackupStore, so `uninstall` can restore it."""
+"""`moshi-cockpit install`: idempotent; every file change goes through BackupStore, so `uninstall` can restore it.
+
+Herdr itself comes from its vendor: install refuses to run without /Applications/Herdr.app and never downloads,
+replaces or verifies it (doctor reports versions this release was not tested with).
+"""
 
 from __future__ import annotations
 
@@ -8,49 +12,21 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from cockpit import agents, defaults, herdr
+from cockpit import agents, compat, defaults
 from cockpit.agents import AgentContext
 from cockpit.config import SERVERS, _read, load_config, origin, save_servers, validate_url
-from cockpit.tokens import ADMIN, bind_identity
 from cockpit.defaults import load_json
-from cockpit.paths import COCKPIT_IDENTITY, Paths, keychain_service
+from cockpit.paths import Paths, keychain_service
 from cockpit.registry import Agent, load_agents, save_agents
-from cockpit.pins import Pin, PinError, verify_codesign
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
+HERDR_MISSING = f"Install Herdr from {compat.HERDR_URL} first, then run this again."
 
 
 @dataclass(frozen=True)
 class InstallOptions:
-    skip_herdr: bool = False
     moshi: Optional[str] = None    # URL to set, "" to remove, None to leave as it is
     ocellio: Optional[str] = None
-
-
-def install_herdr(ctx: AgentContext, pins: Dict[str, Pin], runner: Runner = subprocess.run) -> List[str]:
-    notes = []
-    steps = (
-        ("herdr-core", herdr.installed_core_version(ctx.paths), herdr.install_core),
-        ("herdr-app", herdr.installed_app_version(ctx.paths), herdr.install_app),
-    )
-    for component, installed, install in steps:
-        pin = pins[component]
-        state = herdr.drift(installed, pin)
-        if state == "missing":
-            notes.append(install(pin, ctx.paths, runner))
-            continue
-        # Already there: its signature is checked before anything relies on it (nothing is run).
-        bundle = herdr.installed_bundle(component, ctx.paths)
-        if bundle is None:
-            raise PinError(f"{component}: Version gefunden, aber kein App-Bundle (Signatur nicht prüfbar)")
-        verify_codesign(bundle, pin, runner)
-        if state == "equal":
-            notes.append(f"{component} {pin.version} vorhanden (= Pin, Codesignatur geprüft)")
-        else:
-            shown = ".".join(map(str, installed or ()))
-            notes.append(f"{component} {shown} vorhanden (Codesignatur geprüft), Pin {pin.version} ({state}); "
-                         "kein Downgrade, siehe doctor")
-    return notes
 
 
 # The agents of a first-generation installation (before agents were named freely). Only the migration
@@ -62,7 +38,7 @@ def migrate(ctx: AgentContext) -> List[str]:
     """Carries a first-generation installation over, once ever (marker `migrated` in config.json): its
     agents keep their names and keychain entries, the servers they used become the configured servers.
     Tokens are bound only to origins read from the old agent configs, and only where the configured
-    server agrees; anything else stays unbound (no token goes out until an explicit `bot add`)."""
+    server agrees; anything else stays unbound (no token goes out until it is bound on purpose)."""
     data = _read(ctx.paths)
     if data.get("migrated"):
         return []
@@ -70,7 +46,7 @@ def migrate(ctx: AgentContext) -> List[str]:
         # An agent list exists already (created by hand or an older run): nothing to carry over, ever again.
         _stamp_migrated(ctx)
         return []
-    has = {server: any(ctx.keychain.exists(keychain_service(server, n), n) for n in (*LEGACY_AGENTS, COCKPIT_IDENTITY))
+    has = {server: any(ctx.keychain.exists(keychain_service(server, n), n) for n in LEGACY_AGENTS)
            for server in SERVERS}
     found = [n for n in LEGACY_AGENTS if any(ctx.keychain.exists(keychain_service(s, n), n) for s in SERVERS)]
     if not found and not any(has.values()):
@@ -81,7 +57,7 @@ def migrate(ctx: AgentContext) -> List[str]:
     missing = {s: known[s] for s in SERVERS if has[s] and not config.has(s) and s in known}
     if missing:
         save_servers(ctx.paths, ctx.backup, missing)
-        notes.append("Migration: Server übernommen (" + ", ".join(f"{s} {u}" for s, u in missing.items()) + ")")
+        notes.append("Migration: servers carried over (" + ", ".join(f"{s} {u}" for s, u in missing.items()) + ")")
     config = load_config(ctx.paths)
     agreed = {s: origin(known[s]) for s in SERVERS
               if s in known and config.has(s) and origin(config.servers[s]) == origin(known[s])}
@@ -89,18 +65,12 @@ def migrate(ctx: AgentContext) -> List[str]:
                       bound={s: o for s, o in agreed.items() if ctx.keychain.exists(keychain_service(s, n), n)})
                 for n in found]
     save_agents(ctx.paths, ctx.backup, migrated)
-    if "moshi" in agreed:
-        from cockpit.admin import ADMIN_ACCOUNT, ADMIN_SERVICE
-        if ctx.keychain.exists(keychain_service("moshi", COCKPIT_IDENTITY), COCKPIT_IDENTITY):
-            bind_identity(ctx.paths, ctx.backup, COCKPIT_IDENTITY, config.servers["moshi"])
-        if ctx.keychain.exists(ADMIN_SERVICE, ADMIN_ACCOUNT):
-            bind_identity(ctx.paths, ctx.backup, ADMIN, config.servers["moshi"])
     _stamp_migrated(ctx)
-    notes.append("Migration: Agents übernommen (" + (", ".join(found) or "keine") + "), Namen und Keychain unverändert")
+    notes.append("Migration: agents carried over (" + (", ".join(found) or "none") + "), names and Keychain unchanged")
     unbound = sorted(set(SERVERS) & set(known) - set(agreed))
     if unbound:
-        notes.append("Migration: " + ", ".join(unbound) + " zeigt in der Config woandershin als in den alten Agent-"
-                     "Configs; Tokens bleiben ungebunden, bitte moshi-cockpit bot add <agent> prüfen")
+        notes.append("Migration: " + ", ".join(unbound) + " points somewhere else in the config than in the old agent "
+                     "configs; their tokens stay unbound and are not sent")
     return notes
 
 
@@ -145,15 +115,16 @@ def setup_agents(ctx: AgentContext) -> List[str]:
         except ValueError as exc:
             notes.append(str(exc))
             continue
-        notes.append(f"{agent.name} ({agent.harness}): eingerichtet"
-                     + (f" ({len(changed)} Dateien geändert)" if changed else ", unverändert"))
+        notes.append(f"{agent.name} ({agent.harness}): set up"
+                     + (f" ({len(changed)} files changed)" if changed else ", unchanged"))
     return notes
 
 
 START_TIMEOUT = 90
 POLL_SECONDS = 1
-HERDR_NOT_READY = ("Herdr ist nicht rechtzeitig bereit geworden: Öffne Herdr.app von Hand und führe danach "
-                   "moshi-cockpit install noch einmal aus")
+HERDR_NOT_READY = ("Herdr did not get ready in time: Open Herdr.app yourself, then run moshi-cockpit install "
+                   "again")
+LAYOUT_SHOWN = "Herdr shows the cockpit layout"
 
 
 def _herdr(paths: Paths) -> str:
@@ -183,7 +154,7 @@ def herdr_answers(paths: Paths, runner: Runner) -> bool:
 
 def start_herdr(paths: Paths, runner: Runner, sleep: Callable[[float], None] = time.sleep,
                 now: Callable[[], float] = time.monotonic) -> bool:
-    """Opens Herdr.app and waits until it is ready. Only called after install_herdr checked the signature."""
+    """Opens Herdr.app and waits until it is ready."""
     opened = _ask(runner, ["open", str(paths.herdr_app_bundle)], 30)
     if opened is None or opened.returncode != 0:
         return False
@@ -198,27 +169,27 @@ def start_herdr(paths: Paths, runner: Runner, sleep: Callable[[float], None] = t
 def show_cockpit_layout(paths: Paths, runner: Runner) -> str:
     done = _ask(runner, [_herdr(paths), "do", "layout.switch", json.dumps({"name": defaults.COCKPIT_LAYOUT})], 10)
     if done is not None and done.returncode == 0:
-        return "Herdr zeigt das Layout cockpit"
-    return "Layout cockpit ist angelegt: In Herdr mit ⌘⇧L einschalten"
+        return LAYOUT_SHOWN
+    return "The cockpit layout is set up: switch to it in Herdr with ⌘⇧L"
 
 
-def run(ctx: AgentContext, pins: Dict[str, Pin], options: InstallOptions,
-        runner: Runner = subprocess.run, say: Callable[[str], None] = print,
-        sleep: Callable[[float], None] = time.sleep, now: Callable[[], float] = time.monotonic) -> List[str]:
+def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.run,
+        say: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep,
+        now: Callable[[], float] = time.monotonic) -> List[str]:
+    if not ctx.paths.herdr_app_bundle.is_dir():
+        raise ValueError(HERDR_MISSING)  # before anything is written
     notes: List[str] = []
-    if not options.skip_herdr:
-        notes.extend(install_herdr(ctx, pins, runner))
     if defaults.ensure_telemetry_off(ctx.paths, ctx.backup):
-        notes.append("herdr-app: Telemetrie ausgeschaltet")
+        notes.append("Herdr: telemetry switched off")
     else:
-        notes.append("herdr-app: Telemetrie war schon aus")
-    first_start = not options.skip_herdr and not defaults.main_layout_ready(ctx.paths)
+        notes.append("Herdr: telemetry was off already")
+    first_start = not defaults.main_layout_ready(ctx.paths)
     ready = True
     if first_start:
-        say("• Herdr startet zum ersten Mal, das dauert einen Moment")
+        say("• Herdr is starting for the first time, this takes a moment")
         ready = start_herdr(ctx.paths, runner, sleep, now)
     mods = defaults.install_mods(ctx.paths, ctx.backup)
-    notes.append("herdr-Mods: " + (", ".join(mods) if mods else "unverändert"))
+    notes.append("Herdr mods: " + (", ".join(mods) if mods else "unchanged"))
     old_key = defaults.remove_panel_key(ctx.paths, ctx.backup)
     if old_key:
         notes.append(old_key)
@@ -229,12 +200,12 @@ def run(ctx: AgentContext, pins: Dict[str, Pin], options: InstallOptions,
     if ready:  # otherwise the last note says what to do, once
         notes.append(defaults.install_cockpit_layout(ctx.paths, ctx.backup))
     linked = agents.link_launchers(ctx)
-    notes.append("Launcher verlinkt: " + (", ".join(linked) if linked else "unverändert"))
+    notes.append("Launchers linked: " + (", ".join(linked) if linked else "unchanged"))
     servers = {name: url for name, url in (("moshi", options.moshi), ("ocellio", options.ocellio)) if url is not None}
     if servers:
         changed = save_servers(ctx.paths, ctx.backup, servers)
-        notes.append("Server: " + ", ".join(f"{n} {u or '(entfernt)'}" for n, u in servers.items())
-                     + ("" if changed else ", unverändert"))
+        notes.append("Servers: " + ", ".join(f"{n} {u or '(removed)'}" for n, u in servers.items())
+                     + ("" if changed else ", unchanged"))
     notes.extend(migrate(ctx))
     notes.extend(setup_agents(ctx))
     if first_start:

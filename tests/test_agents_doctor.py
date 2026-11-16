@@ -1,17 +1,19 @@
+import importlib.util
+import io
 import json
 import os
 import stat
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from unittest import mock
 from pathlib import Path
 
-from cockpit import agents, bots, defaults, doctor, installer, registry
+from cockpit import agents, cli, compat, defaults, doctor, registry
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
 from cockpit.secrets.macos import MacKeychain
-from cockpit.pins import PinError, load_pins
-from tests.helpers import MOSHI, OCELLIO, FakeSecurity, configure, temp_paths
+from tests.helpers import MOSHI, OCELLIO, FakeSecurity, bind_non_agent, configure, herdr_app, install, temp_paths
 
 OC, MO = "oc_TOKEN_aaaaaaaa", "bt_TOKEN_bbbbbbbb"
 
@@ -124,47 +126,6 @@ class AgentSetupTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             agents.setup(ctx, agent(ctx, "codex"))
         self.assertIn("moshi-codex", str(caught.exception))
-
-
-class BotAddTest(unittest.TestCase):
-    def test_add_stores_tokens_hidden_and_configures(self):
-        ctx, fake = registered(self)
-        answers = iter([MO, OC])
-        io = bots.BotIO(ask_secret=lambda _p: next(answers), open_url=lambda _u: True, say=lambda _m: None)
-        bots.add("vibe", ctx, io)
-        self.assertEqual(fake.entries[("moshi-vibe", "vibe")], MO)
-        self.assertEqual(fake.entries[("ocellio-vibe", "vibe")], OC)
-        self.assertFalse(fake.argv_contains(MO) or fake.argv_contains(OC))
-        self.assertTrue((ctx.paths.agent_home("vibe") / "vibe" / "config.toml").exists())
-
-    def test_only_configured_servers_are_asked_for(self):
-        ctx, fake = registered(self, servers={"moshi": MOSHI})
-        io = bots.BotIO(ask_secret=lambda _p: MO, open_url=lambda _u: True, say=lambda _m: None)
-        bots.add("codex", ctx, io)
-        self.assertEqual(set(fake.entries), {("moshi-codex", "codex")})
-
-    def test_unknown_agent_is_refused(self):
-        ctx, _ = registered(self)
-        io = bots.BotIO(ask_secret=lambda _p: self.fail("no prompt"), open_url=lambda _u: True, say=lambda _m: None)
-        with self.assertRaises(ValueError):
-            bots.add("nobody", ctx, io)
-
-    def test_strict_hardens_existing_entries_instead_of_skipping(self):
-        ctx, fake = registered(self, {("moshi-vibe", "vibe"): MO, ("ocellio-vibe", "vibe"): OC})
-        io = bots.BotIO(ask_secret=lambda _p: self.fail("no prompt for existing entries"),
-                        open_url=lambda _u: True, say=lambda _m: None)
-        notes = bots.add("vibe", ctx, io, strict=True)
-        self.assertTrue(all("gehärtet" in n for n in notes[:2]), notes)
-        self.assertTrue(ctx.keychain.is_strict("moshi-vibe", "vibe"))
-        self.assertEqual(fake.entries[("moshi-vibe", "vibe")], MO)
-        again = bots.add("vibe", ctx, io, strict=True)
-        self.assertIn("schon in der Keychain und gehärtet", again[0])
-
-    def test_invalid_token_three_times_aborts(self):
-        ctx, _ = registered(self)
-        io = bots.BotIO(ask_secret=lambda _p: "bad token", open_url=lambda _u: True, say=lambda _m: None)
-        with self.assertRaises(ValueError):
-            bots.add("codex", ctx, io)
 
 
 class DefaultsDoctorTest(unittest.TestCase):
@@ -285,24 +246,14 @@ class DefaultsDoctorTest(unittest.TestCase):
         self.assertTrue(any("Socket austauschbar" in f for f in defaults.socket_findings(short / "s.sock", uid)))
         os.chmod(short, 0o755)
 
-    def test_doctor_exit_code_and_version_drift_is_warning(self):
+    def test_doctor_exit_code(self):
         ctx, _ = registered(self)
         ctx.paths.herdr_app_home.mkdir()
         ctx.paths.herdr_settings.write_text(json.dumps({"telemetry": False}))
-        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, pins=load_pins(),
-                                    probe=lambda _url: (401, "Bearer x"), core_version=lambda _p: (0, 1, 99),
-                                    bundle=lambda c, _p: Path("/x/Herdr Core.app") if c == "herdr-core" else None,
-                                    codesign=lambda _b, _pin: None)
+        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, probe=lambda _url: (401, "Bearer x"),
+                                    herdr_versions=lambda _p: (None, None))
         results = {r.name: r for r in doctor.run(dctx)}
-        self.assertEqual(results["herdr-core"].status, doctor.WARN)
-        bad = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, pins=load_pins(),
-                                   probe=lambda _url: (401, "Bearer x"), core_version=lambda _p: (0, 1, 18),
-                                   bundle=lambda c, _p: Path("/x/Herdr Core.app"),
-                                   codesign=lambda _b, pin: (_ for _ in ()).throw(PinError("Team falsch")))
-        core = {r.name: r for r in doctor.run(bad)}["herdr-core"]
-        self.assertEqual(core.status, doctor.FAIL)
-        self.assertIn("Team falsch", core.detail)
-        self.assertEqual(results["herdr-app"].status, doctor.FAIL)  # not installed in temp HOME
+        self.assertEqual(results["herdr"].status, doctor.FAIL)  # not installed in temp HOME
         self.assertEqual(results["telemetry"].status, doctor.OK)
         self.assertEqual(results["cockpit"].status, doctor.WARN)
         self.assertEqual(results["endpoint-moshi"].status, doctor.OK)
@@ -311,7 +262,7 @@ class DefaultsDoctorTest(unittest.TestCase):
     def test_doctor_config_and_endpoints_follow_the_configured_servers(self):
         ctx, _ = context(self)
         probed = []
-        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, pins=load_pins(),
+        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain,
                                     probe=lambda url: probed.append(url) or (401, "Bearer"))
         self.assertEqual(doctor.check_config(dctx)[0].status, doctor.OK)
         self.assertEqual(doctor.check_endpoints(dctx), [])
@@ -333,27 +284,39 @@ class DefaultsDoctorTest(unittest.TestCase):
         ctx, _ = registered(self, {("moshi-vibe", "vibe"): MO, ("moshi-vibe.pending", "vibe"): MO,
                                    ("ocellio-agy.pending", "agy"): OC})
         results = {r.name: r for r in doctor.check_parked(doctor.DoctorContext(
-            paths=ctx.paths, keychain=ctx.keychain, pins=load_pins()))}
+            paths=ctx.paths, keychain=ctx.keychain))}
         parked = results["keychain-parked"]
         self.assertEqual(parked.status, doctor.WARN)
         self.assertIn("interrupted run", parked.detail)   # next to an existing entry
-        self.assertIn("stellt sie wieder her", parked.detail)  # entry missing, copy there
+        self.assertIn("store the token again", parked.detail)  # entry missing, copy there
         self.assertNotIn(MO, parked.detail)
 
     def test_doctor_json_never_contains_tokens(self):
         ctx, _ = registered(self, {("ocellio-vibe", "vibe"): OC, ("moshi-vibe", "vibe"): MO})
-        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, pins=load_pins(),
-                                    probe=lambda _url: (401, "Bearer"), core_version=lambda _p: None)
+        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, probe=lambda _url: (401, "Bearer"),
+                                    herdr_versions=lambda _p: (None, None))
         out = doctor.render(doctor.run(dctx), as_json=True)
         self.assertNotIn(OC, out)
         self.assertNotIn(MO, out)
 
 
 class AgentCommandTest(unittest.TestCase):
+    def test_add_with_the_panels_connect_flag_says_it_is_not_connected(self):
+        import io as _io
+        from contextlib import redirect_stdout
+        paths = temp_paths(self)
+        configure(paths)  # moshi and ocellio configured
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
+                mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())), \
+                mock.patch("cockpit.harnesses.base.Harness.installed", return_value=True), \
+                redirect_stdout(_io.StringIO()) as out:
+            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "codex", "--connect"]), 0)
+        self.assertIn("! x is not connected to the servers", out.getvalue())
+        self.assertEqual([a.name for a in registry.load_agents(paths)], ["x"])
+
     def test_add_list_remove_and_rules(self):
         import io as _io
         from contextlib import redirect_stdout
-        from cockpit import cli
         paths = temp_paths(self)
         env = {"HOME": str(paths.home)}
         with mock.patch.dict(os.environ, env), mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())):
@@ -361,10 +324,11 @@ class AgentCommandTest(unittest.TestCase):
             with redirect_stdout(out):
                 self.assertEqual(cli.main(["agent", "add", "research", "--harness", "codex", "--role", "Recherche"]), 0)
                 self.assertEqual(cli.main(["agent", "add", "ag1", "--harness", "agy"]), 0)
-            self.assertEqual(cli.main(["agent", "add", "ag2", "--harness", "agy"]), 1)      # one agy per machine
-            self.assertEqual(cli.main(["agent", "add", "RESEARCH", "--harness", "vibe"]), 1)  # duplicate name
-            self.assertEqual(cli.main(["agent", "add", "cockpit", "--harness", "vibe"]), 1)   # reserved
-            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "emacs"]), 1)
+            with redirect_stderr(_io.StringIO()):
+                self.assertEqual(cli.main(["agent", "add", "ag2", "--harness", "agy"]), 1)      # one agy per machine
+                self.assertEqual(cli.main(["agent", "add", "RESEARCH", "--harness", "vibe"]), 1)  # duplicate name
+                self.assertEqual(cli.main(["agent", "add", "cockpit", "--harness", "vibe"]), 1)   # reserved
+                self.assertEqual(cli.main(["agent", "add", "x", "--harness", "emacs"]), 1)
             names = [a.name for a in registry.load_agents(paths)]
             self.assertEqual(names, ["research", "ag1"])
             with redirect_stdout(_io.StringIO()):
@@ -375,7 +339,7 @@ class AgentCommandTest(unittest.TestCase):
 class InstallerTest(unittest.TestCase):
     def test_fresh_install_has_no_servers_and_no_agents(self):
         ctx, fake = context(self)
-        notes = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        notes = install(ctx)
         self.assertFalse(ctx.paths.agents_file.exists())
         self.assertFalse(any("Migration" in n for n in notes))
         self.assertTrue((ctx.paths.local_bin / "moshi-cockpit").is_symlink())
@@ -383,15 +347,15 @@ class InstallerTest(unittest.TestCase):
     def test_server_flags_are_validated_and_saved(self):
         from cockpit import config
         ctx, _ = context(self)
-        installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True, moshi=MOSHI))
+        install(ctx, moshi=MOSHI)
         self.assertEqual(config.load_config(ctx.paths).servers, {"moshi": MOSHI})
         for bad in ("http://x.example/mcp", "https://user:pw@example.test/mcp", "https://x.example/mcp?a=1",
                     "https://x.example/mcp#f", "https:///mcp", "https://x.example:99999/mcp", "https://x .example/mcp"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True, moshi=bad))
-        installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True, moshi="https://intern.example:8443/mcp"))
+                install(ctx, moshi=bad)
+        install(ctx, moshi="https://intern.example:8443/mcp")
         self.assertEqual(config.load_config(ctx.paths).servers["moshi"], "https://intern.example:8443/mcp")  # port ok
-        installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True, moshi=""))
+        install(ctx, moshi="")
         self.assertEqual(config.load_config(ctx.paths).servers, {})
 
     def test_first_generation_installation_is_carried_over(self):
@@ -401,17 +365,122 @@ class InstallerTest(unittest.TestCase):
         ctx.paths.agy_mcp_config.parent.mkdir(parents=True)
         ctx.paths.agy_mcp_config.write_text(json.dumps({"mcpServers": {
             "ocellio": {"serverUrl": OCELLIO}, "moshi": {"serverUrl": MOSHI}}}))
-        notes = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
-        self.assertTrue(any("Migration: Agents übernommen (vibe, agy)" in n for n in notes), notes)
+        notes = install(ctx)
+        self.assertTrue(any("Migration: agents carried over (vibe, agy)" in n for n in notes), notes)
         self.assertEqual(config.load_config(ctx.paths).servers, {"moshi": MOSHI, "ocellio": OCELLIO})
         vibe = registry.find(ctx.paths, "vibe")
         self.assertEqual(vibe.home, str(ctx.paths.legacy_vibe_home))
         self.assertTrue((ctx.paths.legacy_vibe_home / "config.toml").exists())
         self.assertEqual(fake.entries[("moshi-vibe", "vibe")], MO)  # keychain untouched
-        again = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        again = install(ctx)
         self.assertFalse(any("Migration" in n for n in again))  # once only
         ctx.backup.restore_all()
         self.assertFalse(ctx.paths.agents_file.exists())
+
+
+class PlainStore:
+    """A SecretStore with only the four protocol methods: no macOS hardening extras."""
+
+    def __init__(self, entries=None):
+        self.entries = dict(entries or {})
+
+    def exists(self, service, account):
+        return (service, account) in self.entries
+
+    def read(self, service, account):
+        return self.entries[(service, account)]
+
+    def write(self, service, account, secret, strict=False):
+        self.entries[(service, account)] = secret
+
+    def delete(self, service, account):
+        del self.entries[(service, account)]
+
+
+class HerdrFromTheVendorTest(unittest.TestCase):
+    """Herdr comes from herdr.dev; moshi-cockpit only checks what is installed."""
+
+    def doctor(self, ctx, app, core, keychain=None):
+        return doctor.DoctorContext(paths=ctx.paths, keychain=keychain or ctx.keychain,
+                                    probe=lambda _url: (401, "Bearer"), herdr_versions=lambda _p: (app, core))
+
+    def test_doctor_warns_on_an_untested_herdr_version_and_does_not_fail(self):
+        ctx, _ = context(self)
+        results = doctor.check_herdr(self.doctor(ctx, "0.2.0", "0.9.9"))
+        by_name = {r.name: r for r in results}
+        self.assertEqual(by_name["herdr"].status, doctor.WARN)
+        self.assertIn("0.2.0", by_name["herdr"].detail)
+        self.assertIn(compat.TESTED_HERDR_APP[0], by_name["herdr"].detail)
+        self.assertEqual(by_name["herdr-core"].status, doctor.WARN)
+        self.assertEqual(doctor.exit_code(results), 0)
+        self.assertIsNone(doctor.quiet(results))
+        tested = doctor.check_herdr(self.doctor(ctx, compat.TESTED_HERDR_APP[0], compat.TESTED_HERDR_CORE[0]))
+        self.assertEqual({r.status for r in tested}, {doctor.OK})
+
+    def test_doctor_fails_without_herdr_and_names_herdr_dev(self):
+        ctx, _ = context(self)
+        results = doctor.check_herdr(self.doctor(ctx, None, "0.1.18"))
+        self.assertEqual([(r.name, r.status) for r in results], [("herdr", doctor.FAIL)])
+        self.assertIn("https://herdr.dev", doctor.quiet(results))
+
+    def test_an_installed_herdr_with_an_odd_or_unreadable_version_only_warns(self):
+        ctx, _ = context(self)
+        for version, shown in (("0.2", "0.2"), ("1.0.0-rc1", "1.0.0-rc1"), ("0.2\x1b[2J", "0.2[2J"), ("", "unknown")):
+            with self.subTest(version=version):
+                herdr_app(ctx.paths, version=version, ran_before=False)
+                self.assertEqual(compat.installed_versions(ctx.paths), (shown, None))
+        (ctx.paths.herdr_app_bundle / "Contents" / "Info.plist").unlink()
+        self.assertEqual(compat.installed_versions(ctx.paths), ("unknown", None))
+        (ctx.paths.herdr_app_bundle / "Contents" / "Info.plist").write_text("broken")
+        self.assertEqual(compat.installed_versions(ctx.paths), ("unknown", None))
+        results = doctor.check_herdr(doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain))
+        self.assertEqual([(r.name, r.status) for r in results], [("herdr", doctor.WARN)])
+        self.assertIn("unknown", results[0].detail)
+        self.assertEqual(doctor.exit_code(results), 0)
+        import shutil
+        shutil.rmtree(ctx.paths.herdr_app_bundle)  # only a missing bundle is an error
+        self.assertEqual(compat.installed_versions(ctx.paths), (None, None))
+
+    def test_compat_reads_the_versions_from_the_bundles(self):
+        ctx, _ = context(self)
+        self.assertEqual(compat.installed_versions(ctx.paths), (None, None))
+        herdr_app(ctx.paths, version="0.1.13")
+        self.assertEqual(compat.installed_versions(ctx.paths), ("0.1.13", None))
+        self.assertEqual(compat.check("0.1.13", None), [compat.Finding("herdr", compat.OK, "Herdr 0.1.13 (tested)")])
+
+    def test_doctor_has_no_admin_or_cockpit_identity_checks(self):
+        token = "bt_TOKEN_cccccccc"
+        ctx, _ = context(self, {(s, a): token for s, a in (("moshi-cockpit", "cockpit"), ("moshi-admin", "admin"),
+                                                            ("moshi-register", "register"), ("moshi-device", "device"))})
+        configure(ctx.paths, servers={"moshi": MOSHI})
+        for identity in ("cockpit", "admin", "register"):
+            bind_non_agent(ctx.paths, MOSHI, identity)
+        names = [r.name for r in doctor.run(self.doctor(ctx, "0.1.13", None))]
+        for gone in ("identity-cockpit", "identity-admin", "identity-register"):
+            self.assertNotIn(gone, names)
+        device = {r.name: r for r in doctor.check_identities(self.doctor(ctx, "0.1.13", None))}["identity-device"]
+        self.assertEqual(device.status, doctor.FAIL)  # stored, but bound to no server: no token goes out
+        bind_non_agent(ctx.paths, MOSHI, "device")
+        device = {r.name: r for r in doctor.check_identities(self.doctor(ctx, "0.1.13", None))}["identity-device"]
+        self.assertEqual(device.status, doctor.OK)
+        self.assertNotIn(token, device.detail)
+
+    def test_doctor_works_with_a_store_without_macos_extras(self):
+        ctx, _ = registered(self, agents_=[VIBE])
+        results = doctor.run(self.doctor(ctx, "0.1.13", None, keychain=PlainStore()))
+        self.assertNotIn("keychain-parked", [r.name for r in results])
+        self.assertEqual(doctor.check_parked(self.doctor(ctx, "0.1.13", None, keychain=PlainStore())), [])
+
+    def test_cli_has_no_bot_or_test_commands(self):
+        commands = set(cli.build_parser()._subparsers._group_actions[0].choices)
+        self.assertEqual(commands, {"install", "uninstall", "connect", "run", "doctor", "status", "agent", "rules",
+                                    "sessions"})
+        for gone in (["bot", "add", "x"], ["bot", "admin-token"], ["bot", "register-token", "list"], ["test"]):
+            with self.subTest(argv=gone), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                cli.main(gone)
+            self.assertEqual(caught.exception.code, 2)
+        for module in ("admin", "agenttest", "bots", "herdr", "pins", "register"):
+            self.assertIsNone(importlib.util.find_spec(f"cockpit.{module}"), module)
 
 
 if __name__ == "__main__":

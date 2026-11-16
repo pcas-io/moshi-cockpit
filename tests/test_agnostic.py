@@ -8,10 +8,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from cockpit import agents, bots, config, doctor, installer, launch, registry
+from cockpit import agents, config, doctor, launch, registry
 from cockpit.secrets.macos import MacKeychain
-from cockpit.pins import load_pins
-from tests.helpers import FOREIGN, MOSHI, OCELLIO, OWN, configure, context, start, temp_paths
+from tests.helpers import FOREIGN, MOSHI, OCELLIO, OWN, bind_non_agent, configure, context, install, start, temp_paths
 
 
 class OriginBindingTest(unittest.TestCase):
@@ -50,14 +49,11 @@ class OriginBindingTest(unittest.TestCase):
             start(self.ctx, "research")
 
     def test_rebinding_needs_the_explicit_flag(self):
-        data = json.loads(self.ctx.paths.mesh_config.read_text())
-        data["servers"]["moshi"] = "https://moshi.new.example/mcp"
-        self.ctx.paths.mesh_config.write_text(json.dumps(data))
-        quiet = bots.BotIO(ask_secret=lambda _p: self.fail("no prompt"), open_url=lambda _u: True, say=lambda _m: None)
-        with self.assertRaises(ValueError) as caught:
-            bots.add("research", self.ctx, quiet)
-        self.assertIn("--rebind", str(caught.exception))
-        bots.add("research", self.ctx, quiet, rebind=True)
+        moved = {"moshi": "https://moshi.new.example"}
+        with self.assertRaises(ValueError):
+            registry.bind(self.ctx.paths, self.ctx.backup, "research", moved)
+        self.assertEqual(registry.find(self.ctx.paths, "research").bound["moshi"], "https://moshi.example.test")
+        registry.bind(self.ctx.paths, self.ctx.backup, "research", moved, rebind=True)
         self.assertEqual(registry.find(self.ctx.paths, "research").bound["moshi"], "https://moshi.new.example")
 
     def test_an_unbound_agent_gets_no_token(self):
@@ -66,38 +62,37 @@ class OriginBindingTest(unittest.TestCase):
             start(self.ctx, "research")
 
 
-class NonAgentTokenTest(unittest.TestCase):  # cockpit and admin tokens too
-    def test_admin_and_cockpit_tokens_only_go_to_their_bound_origin(self):
-        from cockpit import admin, status
-        from tests.helpers import bind_cockpit
-        ctx, _ = context(self, {("moshi-cockpit", "cockpit"): OWN, (admin.ADMIN_SERVICE, admin.ADMIN_ACCOUNT): OWN})
-        configure(ctx.paths, servers={"moshi": MOSHI})
-        with self.assertRaises(ValueError):  # not bound yet: nothing goes out
-            admin.AdminApi.from_keychain(ctx.keychain, MOSHI, ctx.paths)
-        bind_cockpit(ctx.paths, MOSHI, "admin")
-        bind_cockpit(ctx.paths, MOSHI, "cockpit")
-        self.assertIsNotNone(admin.AdminApi.from_keychain(ctx.keychain, MOSHI, ctx.paths))
-        for fn in (lambda url: admin.AdminApi.from_keychain(ctx.keychain, url, ctx.paths),
-                   lambda url: status.fetch_status(ctx.keychain, "cockpit", url, ctx.paths,
-                                                   client_factory=lambda *_a: self.fail("must not connect"))):
-            with self.assertRaises(ValueError) as caught:
-                fn("https://evil.example/mcp")
-            self.assertNotIn(OWN, str(caught.exception))
-
-    def test_bot_add_cockpit_binds_and_refuses_a_silent_move(self):
-        ctx, _ = context(self, {("moshi-cockpit", "cockpit"): OWN})
-        configure(ctx.paths, servers={"moshi": MOSHI})
-        quiet = bots.BotIO(ask_secret=lambda _p: self.fail("no prompt"), open_url=lambda _u: True, say=lambda _m: None)
-        bots.add("cockpit", ctx, quiet)
+class NonAgentTokenTest(unittest.TestCase):  # the device key and the registration token too
+    def test_device_and_registration_tokens_only_go_to_their_bound_origin(self):
         from cockpit import tokens
-        self.assertEqual(tokens.bound_origin(ctx.paths, "cockpit"), "https://moshi.example.test")
-        data = json.loads(ctx.paths.mesh_config.read_text())
-        data["servers"]["moshi"] = "https://moshi.new.example/mcp"
-        ctx.paths.mesh_config.write_text(json.dumps(data))
-        with self.assertRaises(ValueError):
-            bots.add("cockpit", ctx, quiet)
-        bots.add("cockpit", ctx, quiet, rebind=True)
-        self.assertEqual(tokens.bound_origin(ctx.paths, "cockpit"), "https://moshi.new.example")
+        ctx, _ = context(self, {("moshi-device", "device"): OWN, ("moshi-register", "register"): OWN})
+        configure(ctx.paths, servers={"moshi": MOSHI})
+        for identity in (tokens.DEVICE, tokens.REGISTER):
+            with self.subTest(identity=identity):
+                with self.assertRaises(ValueError) as caught:  # not bound yet: nothing goes out
+                    tokens.moshi_token(ctx.paths, ctx.keychain, identity, MOSHI)
+                self.assertIn("moshi-cockpit connect", str(caught.exception))
+                bind_non_agent(ctx.paths, MOSHI, identity)
+                self.assertEqual(tokens.moshi_token(ctx.paths, ctx.keychain, identity, MOSHI), OWN)
+                with self.assertRaises(ValueError) as caught:
+                    tokens.moshi_token(ctx.paths, ctx.keychain, identity, "https://evil.example/mcp")
+                self.assertNotIn(OWN, str(caught.exception))
+        with self.assertRaises(ValueError):  # the person's ocellio token is never sent to moshi
+            tokens.moshi_token(ctx.paths, ctx.keychain, tokens.OCELLIO_DEFAULT, MOSHI)
+
+    def test_the_non_agent_tokens_and_their_binding(self):
+        from cockpit import tokens
+        self.assertEqual(tokens.NON_AGENT, ("device", "register", "ocellio-default"))
+        ctx, _ = context(self)
+        configure(ctx.paths, servers={"moshi": MOSHI})
+        self.assertEqual(tokens.bind_identity(ctx.paths, ctx.backup, "device", MOSHI), "https://moshi.example.test")
+        with self.assertRaises(ValueError):  # no silent move
+            tokens.bind_identity(ctx.paths, ctx.backup, "device", "https://moshi.new.example/mcp")
+        tokens.bind_identity(ctx.paths, ctx.backup, "device", "https://moshi.new.example/mcp", rebind=True)
+        self.assertEqual(tokens.bound_origin(ctx.paths, "device"), "https://moshi.new.example")
+        for gone in ("cockpit", "admin"):  # former helper identities are no longer bound here
+            with self.subTest(gone=gone), self.assertRaises(ValueError):
+                tokens.bind_identity(ctx.paths, ctx.backup, gone, MOSHI)
 
 
 class FilePermissionTest(unittest.TestCase):
@@ -117,7 +112,7 @@ class FilePermissionTest(unittest.TestCase):
         real.symlink_to(moved)
         with self.assertRaises(ValueError):
             registry.load_agents(ctx.paths)
-        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain, pins=load_pins())
+        dctx = doctor.DoctorContext(paths=ctx.paths, keychain=ctx.keychain)
         self.assertEqual({r.name: r.status for r in doctor.check_agents(dctx)}["agents"], doctor.FAIL)
 
     def test_the_file_is_read_through_the_descriptor_that_was_checked(self):
@@ -272,7 +267,7 @@ class SingleInstanceRepairTest(unittest.TestCase):  # one-agent rule (agy): refu
             self.assertIn("agent remove a2", data["problems"][0])
             with redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(cli.main(["status"]), 0)
-            self.assertIn("Hinweis: agy", out.getvalue())
+            self.assertIn("Note: agy", out.getvalue())
             with redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(cli.main(["agent", "list"]), 0)
             self.assertIn("agent remove a2", out.getvalue())
@@ -282,7 +277,7 @@ class SingleInstanceRepairTest(unittest.TestCase):  # one-agent rule (agy): refu
                 self.assertIn("agent remove", str(caught.exception))
             self.assertFalse({h["name"]: h for h in wizard.harness_offer(ctx.paths)}["agy"]["available"])
             report = {c.name: c for c in doctor.check_agents(doctor.DoctorContext(paths=ctx.paths,
-                                                                                   keychain=ctx.keychain, pins={}))}
+                                                                                   keychain=ctx.keychain))}
             self.assertEqual(report["agents"].status, doctor.FAIL)
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main(["agent", "remove", "a2"]), 0)  # the way out works
@@ -317,10 +312,9 @@ class MigrationTest(unittest.TestCase):
         ctx.paths.agy_mcp_config.parent.mkdir(parents=True)
         ctx.paths.agy_mcp_config.write_text(json.dumps({"mcpServers": {"moshi": {"serverUrl": MOSHI},
                                                                        "ocellio": {"serverUrl": OCELLIO}}}))
-        options = installer.InstallOptions(skip_herdr=True)
-        installer.run(ctx, load_pins(), options)
+        install(ctx)
         first = (ctx.paths.agents_file.read_text(), ctx.paths.mesh_config.read_text())
-        installer.run(ctx, load_pins(), options)
+        install(ctx)
         self.assertEqual((ctx.paths.agents_file.read_text(), ctx.paths.mesh_config.read_text()), first)
         writes = [args for args, _ in fake.calls if args[:2] in (["security", "-i"], ["security", "delete-generic-password"])]
         self.assertEqual(writes, [])
@@ -343,30 +337,29 @@ class MigrationSafetyTest(unittest.TestCase):
 
     def test_it_runs_once_ever_even_if_the_agent_list_is_deleted(self):
         ctx = self._legacy()
-        installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        install(ctx)
         ctx.paths.agents_file.unlink()
-        notes = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        notes = install(ctx)
         self.assertFalse(any("Migration" in n for n in notes))
         self.assertFalse(ctx.paths.agents_file.exists())
 
     def test_an_existing_agent_list_stamps_migrated_too(self):
         ctx = self._legacy()
         configure(ctx.paths, servers={}, agents=[{"name": "own", "harness": "codex"}])
-        notes = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        notes = install(ctx)
         self.assertFalse(any("Migration" in n for n in notes))
         self.assertTrue(json.loads(ctx.paths.mesh_config.read_text()).get("migrated"))
         ctx.paths.agents_file.unlink()
-        again = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        again = install(ctx)
         self.assertFalse(any("Migration" in n for n in again))
         self.assertFalse(ctx.paths.agents_file.exists())
 
     def test_a_config_pointing_elsewhere_leaves_tokens_unbound(self):
-        from cockpit import tokens
         ctx = self._legacy(current_moshi="https://evil.example/mcp")
-        notes = installer.run(ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
-        self.assertTrue(any("ungebunden" in n for n in notes), notes)
+        notes = install(ctx)
+        self.assertTrue(any("unbound" in n for n in notes), notes)
         self.assertEqual(registry.find(ctx.paths, "vibe").bound, {})
-        self.assertIsNone(tokens.bound_origin(ctx.paths, "cockpit"))
+        self.assertNotIn("bound", json.loads(ctx.paths.mesh_config.read_text()))  # no helper identity bound either
         with self.assertRaises(ValueError):
             start(ctx, "vibe")
 
@@ -418,15 +411,15 @@ class OwnRulesTest(unittest.TestCase):  # the person's data rule must persist
 
     def test_install_never_overwrites_them_and_keeps_them_in_the_agents(self):
         before = self.ctx.paths.rules_file.read_text()
-        installer.run(self.ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
-        installer.run(self.ctx, load_pins(), installer.InstallOptions(skip_herdr=True))
+        install(self.ctx)
+        install(self.ctx)
         self.assertEqual(self.ctx.paths.rules_file.read_text(), before)
         self.assertIn(self.RULE, self.ctx.paths.agy_agents_md.read_text())
 
     def test_doctor_names_agents_the_rules_do_not_reach(self):
         configure(self.ctx.paths, agents=[{"name": "vibe", "harness": "vibe"}, {"name": "gr", "harness": "grok"}])
         config.save_rules(self.ctx.paths, self.ctx.backup, self.RULE)
-        dctx = doctor.DoctorContext(paths=self.ctx.paths, keychain=self.ctx.keychain, pins=load_pins())
+        dctx = doctor.DoctorContext(paths=self.ctx.paths, keychain=self.ctx.keychain)
         rules = doctor.check_rules(dctx)[0]
         self.assertEqual(rules.status, doctor.WARN)
         self.assertIn("gr", rules.detail)
@@ -442,10 +435,6 @@ class OwnRulesTest(unittest.TestCase):  # the person's data rule must persist
             config.save_rules(self.ctx.paths, self.ctx.backup, "x" * (config.MAX_RULES + 1))
         config.save_rules(self.ctx.paths, self.ctx.backup, "")
         self.assertEqual(config.load_config(self.ctx.paths).rules, "")
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class MoshiNameTest(unittest.TestCase):
@@ -466,3 +455,7 @@ class MoshiNameTest(unittest.TestCase):
         self.assertFalse(hasattr(config.load_config(ctx.paths), "person"))
         ctx.paths.mesh_config.write_text(json.dumps({"person": "anna", "servers": {"moshi": MOSHI}}))
         self.assertEqual(config.load_config(ctx.paths).servers, {"moshi": MOSHI})  # a leftover key is ignored
+
+
+if __name__ == "__main__":
+    unittest.main()
