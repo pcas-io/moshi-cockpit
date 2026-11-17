@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Callable, Dict, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 from cockpit.harnesses import HARNESSES
 from cockpit.harnesses.base import Harness
@@ -92,7 +92,11 @@ def install(harness: Harness, io: InstallIO, runner: Runner, paths: Paths,
     if not io.interactive:
         io.say("Not run: this needs a terminal to confirm. Run the command above yourself, or open a terminal.")
         return 1
-    if io.ask("Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+    try:
+        answer = io.ask("Continue? [y/N] ")
+    except EOFError:  # input closed: that is a no
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
         io.say("Cancelled, nothing was installed.")
         return 1
     code = runner(spec.argv)
@@ -104,7 +108,7 @@ def install(harness: Harness, io: InstallIO, runner: Runner, paths: Paths,
     return 0
 
 
-def run_cli(name: str, paths: Paths, io: InstallIO = None) -> int:
+def run_cli(name: str, paths: Paths, io: Optional[InstallIO] = None) -> int:
     harness = HARNESSES.get(name)
     if harness is None:
         raise ValueError(f"Unknown harness '{name}' (known: {', '.join(HARNESSES)})")

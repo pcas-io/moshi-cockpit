@@ -50,10 +50,29 @@ class HarnessInstallTest(unittest.TestCase):
     def go(self, session, runner, which=lambda tool: "/usr/bin/" + tool):
         return harness_install.install(self.harness, session.io, runner, self.paths, which=which)
 
-    def test_every_harness_has_an_entry_from_a_vendor_page(self):
+    def test_commands_and_sources_are_the_pinned_vendor_ones(self):
         self.assertEqual(set(INSTALL), set(HARNESSES))
+        self.assertEqual({n: sp.argv[2] for n, sp in INSTALL.items()}, {
+            "claude": "curl -fsSL https://claude.ai/install.sh | bash",
+            "codex": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "vibe": "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
+            "agy": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+            "grok": "curl -fsSL https://x.ai/cli/install.sh | bash"})
+        prefixes = ("https://code.claude.com/", "https://github.com/openai/", "https://github.com/mistralai/",
+                    "https://antigravity.google/", "https://docs.x.ai/")
         for name, spec in INSTALL.items():
-            self.assertTrue(spec.source_url.startswith("https://"), name)
+            self.assertTrue(spec.source_url.startswith(prefixes), name)
+
+    def test_end_of_input_at_the_prompt_is_a_no(self):
+        s = Session()
+
+        def eof(prompt):
+            raise EOFError
+
+        s.io = InstallIO(ask=eof, say=s.said.append, interactive=True)
+        self.assertEqual(self.go(s, s.runner()), 1)
+        self.assertEqual(s.ran, [])
+        self.assertIn("Cancelled, nothing was installed.", s.text)
 
     def test_install_asks_before_running(self):
         s = Session(["n"])

@@ -324,7 +324,7 @@ def cmd_sessions(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_harness(args: argparse.Namespace, paths: Paths) -> int:
-    return harness_install.run_cli(args.name, paths, harness_install.InstallIO(interactive=sys.stdin.isatty()))
+    return harness_install.run_cli(args.name, paths, harness_install.InstallIO(interactive=sys.stdin.isatty() and sys.stdout.isatty()))
 
 
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
