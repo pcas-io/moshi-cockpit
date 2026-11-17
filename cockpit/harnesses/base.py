@@ -19,6 +19,10 @@ from cockpit.paths import Paths, keychain_service
 from cockpit.presence import presence_text
 from cockpit.registry import Agent
 
+# The ways to an agent's own tokens: a connected Herdr creates or loads it with "+ Agent".
+CONNECT_HINT = 'connect this Herdr (moshi-cockpit connect), then remove the agent here and add or load it again with "+ Agent"'
+MOVED_HINT = 'moved on purpose? remove the agent here and load it again with "+ Agent"'
+MOVED_SENTENCE = 'Moved on purpose? Remove the agent here and load it again with "+ Agent".'
 # Environment names the harness configs refer to. Fixed per process, so they need no agent in the name.
 TOKEN_ENV = {"moshi": "MESH_MOSHI_TOKEN", "ocellio": "MESH_OCELLIO_TOKEN"}
 # Prefixes dropped from an agent's environment before it starts (no herdr/hc control, no foreign
@@ -85,14 +89,13 @@ class Harness:
         an agent without its token does not start unbound (one agent, one identity)."""
         missing = self.missing_tokens(ctx, agent)
         if missing:
-            raise ValueError(f"{agent.name} hat noch keine eigene Anbindung ({', '.join(missing)}). "
-                             f"Einmal einrichten: moshi-cockpit bot add {agent.name}")
+            raise ValueError(f"{agent.name} has no tokens of its own yet ({', '.join(missing)}): {CONNECT_HINT}")
         wrong = self.origin_mismatches(ctx, agent)
         if wrong:
-            details = ", ".join(f"{s}: gebunden an {agent.bound.get(s) or '–'}, Config {origin(ctx.config.servers[s])}"
+            details = ", ".join(f"{s}: bound to {agent.bound.get(s) or '–'}, config {origin(ctx.config.servers[s])}"
                                 for s in wrong)
-            raise ValueError(f"{agent.name}: Server-Origin passt nicht zum Token ({details}); kein Token gesetzt. "
-                             f"Absichtlich? moshi-cockpit bot add {agent.name} --rebind")
+            raise ValueError(f"{agent.name}: the server origin does not match the token ({details}); no token set. "
+                             f"{MOVED_SENTENCE}")
         return {s: ctx.keychain.read(keychain_service(s, agent.name), agent.name) for s in self.servers(ctx)}
 
     def missing_tokens(self, ctx: Ctx, agent: Agent) -> List[str]:

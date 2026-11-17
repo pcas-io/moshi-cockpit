@@ -25,10 +25,10 @@ class OriginBindingTest(unittest.TestCase):
         self.ctx.paths.mesh_config.write_text(json.dumps(data))
         with self.assertRaises(ValueError) as caught:
             start(self.ctx, "research")
-        self.assertIn("kein Token gesetzt", str(caught.exception))
+        self.assertIn("no token set", str(caught.exception))
         self.assertNotIn(OWN, str(caught.exception))
         found = agents.findings(self.ctx, registry.find(self.ctx.paths, "research"))
-        self.assertTrue(any(f.startswith("Origin-Mismatch moshi") for f in found), found)
+        self.assertTrue(any(f.startswith("Origin mismatch moshi") for f in found), found)
 
     def test_the_default_port_is_the_same_origin(self):
         self.assertEqual(config.origin("https://h.example/mcp"), config.origin("https://h.example:443/mcp"))
@@ -50,8 +50,9 @@ class OriginBindingTest(unittest.TestCase):
 
     def test_rebinding_needs_the_explicit_flag(self):
         moved = {"moshi": "https://moshi.new.example"}
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as caught:
             registry.bind(self.ctx.paths, self.ctx.backup, "research", moved)
+        self.assertIn('load it again with "+ Agent"', str(caught.exception))
         self.assertEqual(registry.find(self.ctx.paths, "research").bound["moshi"], "https://moshi.example.test")
         registry.bind(self.ctx.paths, self.ctx.backup, "research", moved, rebind=True)
         self.assertEqual(registry.find(self.ctx.paths, "research").bound["moshi"], "https://moshi.new.example")
@@ -204,7 +205,7 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
         configure(ctx.paths, agents=[{"name": "writer", "harness": "claude"}])
         with self.assertRaises(ValueError) as caught:
             start(ctx, "writer")
-        self.assertIn("moshi-cockpit bot add writer", str(caught.exception))
+        self.assertIn("moshi-cockpit connect", str(caught.exception))
 
     def test_without_moshi_claude_starts_without_the_wiring(self):
         ctx, _ = context(self)
@@ -238,7 +239,7 @@ class SingleInstanceRepairTest(unittest.TestCase):  # one-agent rule (agy): refu
         configure(ctx.paths, agents=[{"name": "a1", "harness": "agy"}])
         with self.assertRaises(ValueError) as caught:
             registry.add(ctx.paths, ctx.backup, registry.Agent(name="a2", harness="agy"))
-        self.assertIn("globale Config", str(caught.exception))
+        self.assertIn("one global config", str(caught.exception))
         with self.assertRaises(ValueError) as caught:  # the panel's "+ Agent" and agent add take this path
             wizard.create(ctx, "a2", "agy")
         self.assertIn("'a1'", str(caught.exception))
@@ -246,7 +247,7 @@ class SingleInstanceRepairTest(unittest.TestCase):  # one-agent rule (agy): refu
         self.assertFalse(offer["agy"]["available"])
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), redirect_stderr(io.StringIO()) as err:
             self.assertEqual(cli.main(["agent", "add", "a2", "--harness=agy"]), 1)
-        self.assertIn("globale Config", err.getvalue())
+        self.assertIn("one global config", err.getvalue())
         # a list that already holds two (written by hand or before this change) stops every start
         configure(ctx.paths, agents=[{"name": "a1", "harness": "agy"}, {"name": "a2", "harness": "agy"}])
         with self.assertRaises(ValueError):

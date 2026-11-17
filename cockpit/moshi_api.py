@@ -149,7 +149,9 @@ class MoshiApi:
         return previous
 
     def update_profile(self, agent_token: str, role: Optional[str], skill: Optional[str]) -> None:
-        self._call("PATCH", "/api/agent/profile", agent_token, _without_none({"role": role, "skill": skill}))
+        """None leaves a field as it is; "" clears it (sent as null: moshi refuses an empty skill name)."""
+        changes = _without_none({"role": role, "skill": skill})
+        self._call("PATCH", "/api/agent/profile", agent_token, {key: value or None for key, value in changes.items()})
 
     def drop_token(self, agent_token: str) -> None:
         """Ends the agent's token on this installation; the agent is then held by none if it was here."""

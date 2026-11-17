@@ -48,7 +48,7 @@ class Grok(Harness):
     clean_env = False
     resume_flag = ("--resume",)
     permission_args = ("--permission-mode", "default")
-    no_own_agents = "verbindet sich über dein Konto und kann keine eigene moshi-Identität bekommen. Starte ihn über „+“ → Grok"
+    no_own_agents = "connects through your account and cannot get a moshi identity of its own. Start it from \"+\" → Grok"
 
     def findings(self, ctx: Ctx, agent: Agent) -> List[str]:
         return grok_findings(ctx.paths)
