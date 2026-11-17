@@ -53,10 +53,10 @@ class RemoveFromMoshiTest(ConnectedHerdr, unittest.TestCase):
         self.assertIn("no longer accepts", warnings[0])
         self.gone("scout")
 
-    def test_cli_remove_with_the_panels_flag_prints_the_warning_and_succeeds(self):
+    def test_cli_remove_prints_the_warning_and_succeeds(self):
         agents_remote.create(self.ctx, "scout", "codex", api=self.api)
         self.api = offline_api()
-        code, out, err = self.cli("agent", "remove", "scout", "--keep-moshi")
+        code, out, err = self.cli("agent", "remove", "scout")
         self.assertEqual(code, 0)
         self.assertIn("scout removed", out)
         self.assertEqual(err.count("Warning:"), 1)

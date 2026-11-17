@@ -6,7 +6,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, exec, home, layout, notify, openOverlay, panes, run, setShared, spaces, theme } from "herdr";
 import { ago, btn, cockpit, dotColor, plain } from "./util.js";
-import { ownAgents, runningTerminal } from "./list.js";
+import { ownAgents, runningTerminal, sidebarLine } from "./list.js";
 
 const POLL_MS = 30000;
 const CONNECT_POLL_MS = 3000; // back in herdr right after the connect tab finished, not half a minute later
@@ -58,10 +58,15 @@ export default class Moshi extends View {
   }
 
   // Once per start of herdr: closed without connecting, the "+" menu still has the way.
+  // Disconnected or unreachable never open it: the sidebar's one line says so, and a click there opens it.
   offerConnect() {
     setShared(NEEDS_CONNECT, !!this.data?.needs_connect);
     if (!this.data?.needs_connect || this.asked) return;
     this.asked = true;
+    this.openConnect();
+  }
+
+  openConnect() {
     openOverlay({ mod: "mesh-agents", kind: "dialog", width: 420, height: 220, props: { view: "connect" } });
   }
 
@@ -124,24 +129,27 @@ export default class Moshi extends View {
     const t = theme();
     const list = ownAgents(this.data?.local, this.data?.agents);
     const collapsed = narrow();
+    const line = sidebarLine(this.data);
     return v_flex().id("own-agents").size_full().min_h(0).bg(t.chrome).border_t(1).border_color(t.border).text_size(13)
       .when(!collapsed, (el) => el.child(
         h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().justify_between()
           .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Your agents"))
           .child(div().id("own-new").text_size(13).text_color(t.dim).hover((s) => s.text_color(t.foreground))
-            .tooltip("New agent…")
+            .tooltip("+ Agent")
             .on_click(() => this.newAgent())
             .child("+"))))
-      // Offline both would say the same: the line with the action wins.
-      .when(!collapsed && !!this.error && !this.finding, (el) => el.child(
+      // One line about moshi at most: the connection line wins over the health check, which wins over an error.
+      .when(!collapsed && !!line, (el) => el.child(
+        div().id("own-connection").px(16).pb(4).text_size(12).text_color(line.connect ? t.blocked : t.dim)
+          .when(line.connect, (d) => d.cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click(() => this.openConnect()))
+          .child(line.text)))
+      .when(!collapsed && !line && !!this.error && !this.finding, (el) => el.child(
         div().px(16).pb(4).text_size(12).text_color(t.blocked).child(this.error)))
-      .when(!collapsed && !!this.finding && !this.data?.needs_connect, (el) => el.child(
+      .when(!collapsed && !line && !!this.finding, (el) => el.child(
         div().px(16).pb(4).text_size(12).text_color(t.blocked).child(this.finding)))
       // A list that breaks a one-agent rule (agy): shown, starts refused by the CLI, way out named.
       .when(!collapsed, (el) => el.children((this.data?.problems ?? []).map((p) =>
         div().px(16).pb(4).text_size(12).text_color(t.blocked).child(plain(p)))))
-      .when(!collapsed && !!this.data?.needs_connect, (el) => el.child(
-        div().px(16).text_size(12).text_color(t.dim).child("Noch nicht verbunden")))
       .when(!collapsed && !!this.data && !this.data.needs_connect && !list.length, (el) => el.child(
         h_flex().px(16).pt(2).child(btn("own-first", t, "+ Agent", () => this.newAgent()))))
       .child(v_flex().id("own-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar()

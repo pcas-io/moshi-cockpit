@@ -50,11 +50,11 @@ def unavailable(paths: Paths) -> List[str]:
 
 
 def harness_offer(paths: Paths) -> List[dict]:
-    """For the dialog's "New agent": every harness, whether it can take a new agent, why not, and whether
-    it connects to the servers with tokens of its own."""
+    """For the dialog's "+ Agent": every harness, whether it is installed, whether it can take a new agent,
+    why not, and whether it connects to the servers with tokens of its own."""
     free = set(harness_choices(paths))
     reasons = {line.split(":", 1)[0]: line.split(":", 1)[1].strip() for line in unavailable(paths)}
-    return [{"name": name, "available": name in free, "reason": reasons.get(name, ""),
+    return [{"name": name, "installed": h.installed(paths), "available": name in free, "reason": reasons.get(name, ""),
              "native_mesh": h.native_mesh} for name, h in HARNESSES.items()]
 
 

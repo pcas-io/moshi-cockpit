@@ -17,7 +17,7 @@ export function ago(iso) {
   const t = Date.parse(iso || "");
   if (!t) return "–";
   const min = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (min < 1) return "jetzt";
+  if (min < 1) return "now";
   if (min < 60) return `${min} min`;
   if (min < 48 * 60) return `${Math.round(min / 60)} h`;
   return `${Math.round(min / 1440)} d`;
@@ -37,6 +37,6 @@ export function plain(text, max = 300) {
 // Runs a moshi-cockpit subcommand and returns parsed JSON (or the raw text with asJson=false).
 export async function cockpit(exec, home, args, asJson = true) {
   const r = await exec(`${home()}/.local/bin/moshi-cockpit`, args);
-  if (r.code !== 0) throw new Error(plain(r.stderr || `moshi-cockpit ${args[0]} fehlgeschlagen`).replace(/^Fehler: /, ""));
+  if (r.code !== 0) throw new Error(plain(r.stderr || `moshi-cockpit ${args[0]} failed`).replace(/^Error: /, ""));
   return asJson ? JSON.parse(r.stdout) : r.stdout.trim();
 }

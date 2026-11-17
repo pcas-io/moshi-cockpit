@@ -307,7 +307,7 @@ class AgentCommandTest(unittest.TestCase):
                 mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())), \
                 mock.patch("cockpit.harnesses.base.Harness.installed", return_value=True), \
                 redirect_stderr(_io.StringIO()) as err:
-            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "codex", "--connect"]), 3)  # flag still accepted
+            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "codex"]), 3)
         self.assertIn("moshi-cockpit connect", err.getvalue())
         self.assertEqual(registry.load_agents(paths), [])
 

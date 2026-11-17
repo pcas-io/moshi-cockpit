@@ -136,6 +136,14 @@ class HarnessInstallTest(unittest.TestCase):
             self.assertTrue(spec.argv[2].startswith("curl "), name)
             self.assertEqual(harness_install.shown_command(spec), spec.argv[2])
 
+    def test_the_offer_tells_the_panel_which_harnesses_are_installed(self):
+        from cockpit import wizard
+        self.appear()  # codex in ~/.local/bin, nothing else
+        offer = {h["name"]: h for h in wizard.harness_offer(self.paths)}
+        self.assertEqual({name: h["installed"] for name, h in offer.items()},
+                         {"claude": False, "codex": True, "vibe": False, "agy": False, "grok": False})
+        self.assertTrue(offer["codex"]["available"])
+
     def test_cli_rejects_an_unknown_harness(self):
         with self.assertRaises(SystemExit):
             cli.build_parser().parse_args(["harness", "install", "nope"])
