@@ -8,7 +8,7 @@ import sys
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, installer, launch, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, installer, launch, registry, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -85,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     rul_sub.add_parser("show", help="show your own rules")
     rul_set = rul_sub.add_parser("set", help="set your own rules (text from stdin or --text) and set the agents up again")
     rul_set.add_argument("--text", help="the rules (without: from stdin); empty removes them")
+
+    har = sub.add_parser("harness", help="install a missing agent CLI with its vendor's official installer")
+    har_sub = har.add_subparsers(dest="harness_command", required=True)
+    har_inst = har_sub.add_parser("install", help="ask, then run the vendor's installer")
+    har_inst.add_argument("name", choices=sorted(harness_install.INSTALL))
 
     ses = sub.add_parser("sessions", help="an agent's sessions that can be resumed (for the session picker)")
     ses.add_argument("agent", nargs="?", help="name of an agent; without it --harness")
@@ -318,8 +323,13 @@ def cmd_sessions(args: argparse.Namespace, paths: Paths) -> int:
     return 0
 
 
+def cmd_harness(args: argparse.Namespace, paths: Paths) -> int:
+    return harness_install.run_cli(args.name, paths, harness_install.InstallIO(interactive=sys.stdin.isatty()))
+
+
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
-            "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect}
+            "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect,
+            "harness": cmd_harness}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
