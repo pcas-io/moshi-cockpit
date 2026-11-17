@@ -24,15 +24,15 @@ class PresenceTest(unittest.TestCase):
     def test_presence_is_neutral_and_follows_the_servers(self):
         both = presence_text("codex", Config(servers={"moshi": MOSHI, "ocellio": OCELLIO}), "Review")
         self.assertIn("`codex`", both)
-        self.assertIn("Rolle: Review", both)
+        self.assertIn("Role: Review", both)
         self.assertIn("mesh_register", both)
         self.assertIn("context_load", both)
         for tool in policy.IRREVERSIBLE:
             self.assertIn(f"`{tool}`", both)
-        self.assertIn("IRREVERSIBEL:", both)
+        self.assertIn("IRREVERSIBLE:", both)
         with_skill = presence_text("x", Config(servers={"ocellio": OCELLIO}), "Review", "skill-a")
-        self.assertIn("`skill-a` mit `load_skill`", with_skill)
-        self.assertIn("in deiner ersten Antwort", with_skill)
+        self.assertIn("`skill-a` with `load_skill`", with_skill)
+        self.assertIn("in your first answer", with_skill)
         self.assertNotIn("load_skill", presence_text("x", Config(servers={"moshi": MOSHI}), "", "skill-a"))
         self.assertNotIn("load_skill", both)
         alone = presence_text("solo", Config())
@@ -142,7 +142,7 @@ class ApprovalTest(unittest.TestCase):
         self.assertEqual(approvals.grok_findings(ctx.paths), [])  # no grok config: nothing to say
         ctx.paths.grok_config.parent.mkdir(parents=True)
         ctx.paths.grok_config.write_text('yolo = false\npermission_mode = "always-approve"\n')
-        self.assertTrue(any("ein direkter grok-Start nicht" in f for f in approvals.grok_findings(ctx.paths)))
+        self.assertTrue(any("a direct grok start does not" in f for f in approvals.grok_findings(ctx.paths)))
         ctx.paths.grok_config.write_text("permission_mode = 'always-approve'\n")
         self.assertEqual(len(approvals.grok_findings(ctx.paths)), 1)
         ctx.paths.grok_config.write_text('yolo = true\npermission_mode = "default"\n')
@@ -187,12 +187,12 @@ class ApprovalTest(unittest.TestCase):
         ctx = ctx_for(self)
         configure(ctx.paths, servers={}, agents=[{"name": n, "harness": n} for n in ("claude", "codex", "vibe", "agy", "grok")])
         for name in ("claude", "codex", "vibe", "agy", "grok"):
-            harness, argv, env = l.command(ctx.paths, ctx.keychain, name, ["Auftrag"])
+            harness, argv, env = l.command(ctx.paths, ctx.keychain, name, ["task"])
             with self.subTest(name=name):
                 self.assertEqual(argv[0], harness.binary)
                 self.assertFalse([k for k in env if k.startswith("MESH_")])  # no servers, no tokens
                 self.assertNotIn("mcp_servers", " ".join(argv))
-        self.assertEqual(l.command(ctx.paths, ctx.keychain, "agy", ["Auftrag"])[1][-2:], ["-i", "Auftrag"])
+        self.assertEqual(l.command(ctx.paths, ctx.keychain, "agy", ["task"])[1][-2:], ["-i", "task"])
         self.assertIn("manual", l.command(ctx.paths, ctx.keychain, "claude", [])[1])
         self.assertIn("default", l.command(ctx.paths, ctx.keychain, "grok", [])[1])
 

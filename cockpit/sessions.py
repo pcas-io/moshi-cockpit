@@ -10,7 +10,7 @@ characters and cut short; nothing here is logged or sent anywhere.
 | claude | ~/.claude/projects/<folder with / and . as ->/<id>.jsonl     | --resume <id> (in its folder)|
 | codex  | ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (session_meta)  | resume <id>                  |
 | grok   | ~/.grok/sessions/<urlencoded folder>/<id>/summary.json        | --resume <id>                |
-| vibe   | <VIBE_HOME des Agents oder ~/.vibe>/logs/session/unified/<id>/meta.json | --resume <id> |
+| vibe   | <the agent's VIBE_HOME or ~/.vibe>/logs/session/unified/<id>/meta.json | --resume <id> |
 | agy    | ~/.gemini/antigravity-cli/cache/conversation_metadata.json   | --conversation <id>          |
 """
 
@@ -37,16 +37,17 @@ SCAN_FACTOR = 4  # look at a few more files than shown, the newest by mtime
 MAX_INDEX_LINES = 20000
 
 
-# The first message earlier versions of the panel sent is not a useful title: show the task.
-_PANEL_PREFIX = "Melde dich gemäß Präsenzregel in moshi an"
-_PANEL_TASK = re.compile(r"Dann dein Auftrag(?: von [^:\n]{1,40})?:")
+# The first message earlier versions of the panel sent is not a useful title: show the task. Session titles
+# of those versions are German, so both wordings are recognised (data, not text that is shown).
+_PANEL_PREFIXES = ("Melde dich gemäß Präsenzregel in moshi an", "Sign in to moshi as the presence rule says")
+_PANEL_TASK = re.compile(r"(?:Dann dein Auftrag|Then your task)(?: (?:von|from) [^:\n]{1,40})?:")
 
 
 def _readable(title: object) -> str:
     text = str(title or "").strip()
-    if text.startswith(_PANEL_PREFIX):
+    if text.startswith(_PANEL_PREFIXES):
         match = _PANEL_TASK.search(text)
-        return text[match.end():].strip() if match else "(angemeldet, ohne Auftrag)"
+        return text[match.end():].strip() if match else "(signed in, no task)"
     return text
 
 
@@ -54,7 +55,7 @@ def _session(sid: object, title: object, updated: object, cwd: object) -> Option
     sid = str(sid or "")
     if not _ID_RE.fullmatch(sid):
         return None
-    return {"id": sid, "title": clean(_readable(title), "(ohne Titel)", limit=MAX_TITLE),
+    return {"id": sid, "title": clean(_readable(title), "(untitled)", limit=MAX_TITLE),
             "updated": clean(updated, ""), "cwd": str(cwd or "")}
 
 
@@ -277,7 +278,7 @@ def list_sessions(harness: str, paths: Paths, folder: Optional[str] = None, limi
     """Sessions of a harness, newest first. `home` narrows to one agent where the harness keeps
     sessions per agent (Vibe); the other CLIs keep one store per person."""
     if harness not in READERS:
-        raise ValueError(f"Unbekannte Harness '{harness}'. Erlaubt: {', '.join(AGENTS)}")
+        raise ValueError(f"Unknown harness '{harness}'. Allowed: {', '.join(AGENTS)}")
     folder = os.path.normpath(folder) if folder else None
     limit = max(1, min(limit, 30))
     found = READERS[harness](paths, folder, limit, home)

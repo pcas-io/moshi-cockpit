@@ -8,19 +8,24 @@ export const HERDR_APP = { claude: "claude", codex: "codex", vibe: "vibe", agy: 
 // herdr's display names, for when knownAgents() has not answered.
 const NAMES = { claude: "Claude Code", codex: "Codex", vibe: "Vibe", agy: "Antigravity", grok: "Grok" };
 
+// Shown when herdr finds a harness (its login shell may define it) that `moshi-cockpit run` cannot start.
+export const HERDR_ONLY = "found by Herdr, not on moshi-cockpit's PATH";
+
 // offer: the CLI's `harnesses` rows {name, installed, available, reason}; known: knownAgents() (may be missing
-// when its check failed); cli: the path of moshi-cockpit. Installed when either one finds it (herdr asks the login
-// shell, the CLI looks at PATH and ~/.local/bin). Missing → an install tab with the vendor's official installer.
+// when its check failed); cli: the path of moshi-cockpit. Selectable only when the CLI finds it, since `run`
+// starts it from there. herdr finding it alone gives a note and the install action; missing everywhere → an
+// install tab with the vendor's official installer.
 export function harnessRows(offer, known, cli) {
   const byKey = new Map((known ?? []).map((a) => [a.key, a]));
   return (offer ?? []).filter((h) => h.name in HERDR_APP).map((h) => {
     const app = byKey.get(HERDR_APP[h.name]);
     const label = app?.name || NAMES[h.name];
-    const installed = !!h.installed || !!app?.installed;
+    const installed = !!h.installed;
+    const herdrOnly = !installed && !!app?.installed;
     return {
-      name: h.name, label, installed,
+      name: h.name, label, installed, herdrOnly,
       selectable: installed && !!h.available,
-      note: installed ? (h.available ? "" : String(h.reason ?? "")) : "not installed",
+      note: installed ? (h.available ? "" : String(h.reason ?? "")) : herdrOnly ? HERDR_ONLY : "not installed",
       install: installed ? null : { name: `Install ${label}`, argv: [cli, "harness", "install", h.name] },
     };
   });

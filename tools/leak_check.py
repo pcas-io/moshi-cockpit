@@ -3,6 +3,7 @@
 
     python3 tools/leak_check.py                    scan every tracked or new (not ignored) file and its path
     python3 tools/leak_check.py --commits RANGE    scan author, committer and message of each commit in RANGE
+                                                   (GitHub's own merge commits keep their `#N` and address)
     python3 tools/leak_check.py --text FILE...     scan text that becomes public outside git (`-` = stdin)
     python3 tools/leak_check.py --refs REF...      scan branch and tag names
 
@@ -30,7 +31,11 @@ DEFAULT_WORDS = Path(".config") / "moshi-cockpit-dev" / "blocked-words.txt"
 NO_WORDS = f"leak_check: private word list not found (set {WORDS_ENV})"
 
 ALLOWED_EMAIL_DOMAINS = frozenset({"example.test", "example.invalid", "users.noreply.github.com", "anthropic.com"})
-COMMIT_FORMAT = "%an%n%ae%n%cn%n%ce%n%B"
+COMMIT_FORMAT = "%P%n%an%n%ae%n%cn%n%ce%n%B"  # parents first; findings count lines from the author's name
+# GitHub's own merge commits ("Merge pull request #N from owner/branch", committed by GitHub when a pull request is
+# merged on the website): their `#N` and GitHub's address are allowed there and nowhere else.
+GITHUB_NAME, GITHUB_EMAIL = "GitHub", "noreply@" + "github.com"  # split: this file passes its own guard
+GITHUB_MERGE = re.compile(r"Merge pull request #\d+ from (\S+)")
 
 # Knowledge-graph ids: the short form of the current id generation, full UUIDv7, and any standalone 8-hex
 # token (letters and digits) on a line that talks about ids.
@@ -124,11 +129,24 @@ def scan_files(root: Path, words: frozenset, git: Git) -> List[str]:
     return findings
 
 
+def github_merge(parents: str, lines: List[str]) -> bool:
+    """A merge GitHub made: two parents, committed by GitHub, with GitHub's subject. The author is whoever
+    merged, or GitHub too."""
+    return (len(parents.split()) == 2 and len(lines) > 4 and lines[2:4] == [GITHUB_NAME, GITHUB_EMAIL]
+            and bool(GITHUB_MERGE.fullmatch(lines[4])))
+
+
 def scan_commits(root: Path, revisions: str, words: frozenset, git: Git) -> List[str]:
     findings = []
     for sha in git(["rev-list", revisions], root).split():
-        text = git(["show", "-s", f"--format={COMMIT_FORMAT}", sha], root)
-        for number, line in enumerate(text.splitlines(), 1):
+        parents, _, text = git(["show", "-s", f"--format={COMMIT_FORMAT}", sha], root).partition("\n")
+        lines = text.splitlines()
+        merge = github_merge(parents, lines)
+        for number, line in enumerate(lines, 1):
+            if merge and number in (2, 4) and line == GITHUB_EMAIL:
+                continue  # GitHub's address as author or committer of its own merge
+            if merge and number == 5:
+                line = "Merge pull request from " + GITHUB_MERGE.fullmatch(line).group(1)  # the branch is checked
             findings += [f"commit {sha[:12]}:{number}: {rule}" for rule in scan_line(line, words)]
     return findings
 

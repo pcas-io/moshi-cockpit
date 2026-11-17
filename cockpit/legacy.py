@@ -29,7 +29,7 @@ from cockpit.harnesses import HARNESSES
 from cockpit.moshi_api import MoshiApi, MoshiError
 from cockpit.paths import Paths, keychain_service
 from cockpit.registry import Agent, _validate, load_agents, save_agents
-from cockpit.secrets import HardenedStore, SecretStore
+from cockpit.secrets import HardenedStore, KeychainError, SecretStore
 from cockpit.tokens import OCELLIO_DEFAULT, REGISTER, bound_origin, moshi_token
 
 FOUND = 'Found an earlier setup. After "Connect to moshi", run: moshi-cockpit migrate'
@@ -151,14 +151,18 @@ def _carry_ocellio(keychain: SecretStore, url: Optional[str], old_origin: Option
     """The person's old ocellio token becomes `ocellio-default`, only for the server it was given for and
     with the same strictness. Returns the origin to bind it to, or None when nothing was carried over.
     An `ocellio-default` that is already there is bound only when it is that same token (an import that
-    stopped half-way wrote it)."""
-    if not url or old_origin != origin(url) or not keychain.exists(*OLD_OCELLIO_ENTRY):
+    stopped half-way wrote it). The Keychain refusing (Deny at its prompt) carries nothing over: connect
+    asks for the token later."""
+    try:
+        if not url or old_origin != origin(url) or not keychain.exists(*OLD_OCELLIO_ENTRY):
+            return None
+        token = keychain.read(*OLD_OCELLIO_ENTRY)
+        if keychain.exists(*OCELLIO_ENTRY):
+            return old_origin if keychain.read(*OCELLIO_ENTRY) == token else None
+        strict = isinstance(keychain, HardenedStore) and keychain.is_strict(*OLD_OCELLIO_ENTRY)
+        keychain.write(*OCELLIO_ENTRY, token, strict=strict)
+    except KeychainError:
         return None
-    token = keychain.read(*OLD_OCELLIO_ENTRY)
-    if keychain.exists(*OCELLIO_ENTRY):
-        return old_origin if keychain.read(*OCELLIO_ENTRY) == token else None
-    strict = isinstance(keychain, HardenedStore) and keychain.is_strict(*OLD_OCELLIO_ENTRY)
-    keychain.write(*OCELLIO_ENTRY, token, strict=strict)
     return old_origin
 
 

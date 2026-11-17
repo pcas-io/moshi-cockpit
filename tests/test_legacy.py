@@ -3,6 +3,7 @@
 import json
 import os
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 from cockpit import connect, legacy, tokens
@@ -136,6 +137,25 @@ class ImportTest(unittest.TestCase):
         self.assertNotIn(("ocellio-default", "default"), self.fake.entries)
         self.assertIsNone(setting(self.paths, "bound"))
         self.assertIn(OLD_OCELLIO_ENTRY, self.fake.entries)  # migrate removes it with the other helper entries
+
+    def test_a_denied_keychain_read_leaves_the_ocellio_token_for_connect(self):
+        from cockpit.secrets import KeychainError
+        write_old_setup(self.paths)
+        real_read = self.ctx.keychain.read
+
+        def read(service, account):
+            if (service, account) == OLD_OCELLIO_ENTRY:
+                raise KeychainError("the Keychain refused access")  # the person chose Deny
+            return real_read(service, account)
+
+        with mock.patch.object(self.ctx.keychain, "read", side_effect=read):
+            notes = self.run_import()
+        self.assertEqual(load_config(self.paths).servers, {"moshi": MOSHI, "ocellio": OCELLIO})
+        self.assertNotIn(("ocellio-default", "default"), self.fake.entries)
+        self.assertIsNone(setting(self.paths, "bound"))
+        self.assertIn(OLD_OCELLIO_ENTRY, self.fake.entries)
+        self.assertNotIn("ocellio token", notes[-1])
+        self.assertTrue((self.paths.state / legacy.IMPORTED_MARKER).exists())
 
     def test_import_restores_the_old_backups_first(self):
         settings, old_mod = self.paths.herdr_settings, self.paths.herdr_mods / "old-panel" / "mod.js"

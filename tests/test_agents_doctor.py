@@ -47,7 +47,7 @@ def agent(ctx, name):
 class AgentSetupTest(unittest.TestCase):
     def test_vibe_profile_per_agent_from_the_configured_servers(self):
         ctx, _ = registered(self, {("moshi-research", "research"): MO, ("ocellio-research", "research"): OC},
-                            agents_=[{"name": "research", "harness": "vibe", "role": "Recherche"}])
+                            agents_=[{"name": "research", "harness": "vibe", "role": "Research"}])
         agents.setup(ctx, agent(ctx, "research"))
         home = ctx.paths.agent_home("research") / "vibe"
         config = (home / "config.toml").read_text()
@@ -58,7 +58,7 @@ class AgentSetupTest(unittest.TestCase):
         self.assertIn('[tools.ocellio_update_entity]\npermission = "ask"', config)
         presence = (home / "AGENTS.md").read_text()
         self.assertIn("`research`", presence)
-        self.assertIn("Rolle: Recherche", presence)
+        self.assertIn("Role: Research", presence)
         self.assertEqual(agents.findings(ctx, agent(ctx, "research")), [])
 
     def test_without_servers_no_tokens_and_no_mesh_wiring(self):
@@ -104,7 +104,7 @@ class AgentSetupTest(unittest.TestCase):
         ctx.paths.agy_mcp_config.write_text(json.dumps(data))
         os.chmod(ctx.paths.agy_mcp_config, 0o644)
         found = " | ".join(agents.findings(ctx, agent(ctx, "agy")))
-        self.assertIn("weicht", found)
+        self.assertIn("differs from what moshi-cockpit writes", found)
         self.assertIn("0600", found)
         self.assertNotIn(OC, found)
         self.assertNotIn(MO, found)
@@ -119,7 +119,7 @@ class AgentSetupTest(unittest.TestCase):
                       '\n[[mcp_servers]]\nname = "evil"\nurl = "https://example.invalid/mcp"\n'):
             config.write_text(original + extra)
             with self.subTest(extra=extra):
-                self.assertTrue(any("weicht" in f for f in agents.findings(ctx, agent(ctx, "vibe"))))
+                self.assertTrue(any("differs from what moshi-cockpit writes" in f for f in agents.findings(ctx, agent(ctx, "vibe"))))
 
     def test_missing_tokens_for_configured_servers_stop_setup(self):
         ctx, _ = registered(self)
@@ -150,7 +150,7 @@ class DefaultsDoctorTest(unittest.TestCase):
         keys = ctx.paths.herdr_app_home / "keys.json"
         keys.write_text(json.dumps({"global": {"cmd-t": "tab.new", "cmd-shift-m": "mod.open:moshi"},
                                     "layout:cockpit": {"cmd-shift-m": "layout.toggle:moshi"}}))
-        self.assertIn("entfernt", defaults.remove_panel_key(ctx.paths, ctx.backup))
+        self.assertIn("removed", defaults.remove_panel_key(ctx.paths, ctx.backup))
         self.assertEqual(json.loads(keys.read_text()), {"global": {"cmd-t": "tab.new"}})
         self.assertIsNone(defaults.remove_panel_key(ctx.paths, ctx.backup))
         keys.write_text(json.dumps({"global": {"cmd-shift-m": "tab.new"}}))
@@ -166,7 +166,7 @@ class DefaultsDoctorTest(unittest.TestCase):
         keys.write_text("{ kaputt")
         self.assertIsNone(defaults.remove_panel_key(ctx.paths, ctx.backup))
         self.assertEqual(keys.read_text(), "{ kaputt")
-        self.assertEqual(defaults.cockpit_findings(ctx.paths), ["Layout cockpit fehlt"])
+        self.assertEqual(defaults.cockpit_findings(ctx.paths), ["The cockpit layout is missing"])
 
     def test_cockpit_layout_puts_own_agents_in_the_sidebar_and_leaves_main_untouched(self):
         ctx, _ = context(self)
@@ -179,8 +179,8 @@ class DefaultsDoctorTest(unittest.TestCase):
         work = {"id": "work", "type": "column", "children": [{"id": "main", "content": {"tab": "active"}}, panel]}
         main = {"id": "root", "type": "row", "children": [sidebar, work]}
         (layouts / "main.json").write_text(json.dumps(main))
-        self.assertIn("angelegt", defaults.install_cockpit_layout(ctx.paths, ctx.backup))
-        self.assertIn("unverändert", defaults.install_cockpit_layout(ctx.paths, ctx.backup))
+        self.assertIn("created", defaults.install_cockpit_layout(ctx.paths, ctx.backup))
+        self.assertIn("unchanged", defaults.install_cockpit_layout(ctx.paths, ctx.backup))
         layout = json.loads((layouts / "cockpit.json").read_text())
         self.assertEqual([c["id"] for c in layout["children"]], ["sidebar", "work"])  # the right side stays empty
         self.assertEqual([c["id"] for c in layout["children"][0]["children"]], ["spaces", "agents", "own-agents"])
@@ -190,7 +190,7 @@ class DefaultsDoctorTest(unittest.TestCase):
 
     def test_cockpit_layout_skipped_without_main(self):
         ctx, _ = context(self)
-        self.assertIn("übersprungen", defaults.install_cockpit_layout(ctx.paths, ctx.backup))
+        self.assertIn("skipped", defaults.install_cockpit_layout(ctx.paths, ctx.backup))
 
     def test_status_json_is_sanitized_and_compact(self):
         from cockpit import status
@@ -229,7 +229,7 @@ class DefaultsDoctorTest(unittest.TestCase):
         uid = os.getuid()
         self.assertEqual(defaults.socket_findings(ctx.paths.herdr_socket, uid), [])  # not running: fine
         ctx.paths.herdr_socket.write_text("")  # a plain file where the socket should be
-        self.assertTrue(any("kein Socket" in f for f in defaults.socket_findings(ctx.paths.herdr_socket, uid)))
+        self.assertTrue(any("is not a socket" in f for f in defaults.socket_findings(ctx.paths.herdr_socket, uid)))
         ctx.paths.herdr_socket.unlink()
         server = socket.socket(socket.AF_UNIX)
         self.addCleanup(server.close)
@@ -239,9 +239,9 @@ class DefaultsDoctorTest(unittest.TestCase):
         os.chmod(short, 0o755)
         server.bind(str(short / "s.sock"))
         self.assertEqual(defaults.socket_findings(short / "s.sock", uid), [])
-        self.assertTrue(any("gehört nicht dir" in f for f in defaults.socket_findings(short / "s.sock", uid + 1)))
+        self.assertTrue(any("is not yours" in f for f in defaults.socket_findings(short / "s.sock", uid + 1)))
         os.chmod(short, 0o777)
-        self.assertTrue(any("Socket austauschbar" in f for f in defaults.socket_findings(short / "s.sock", uid)))
+        self.assertTrue(any("the socket could be swapped" in f for f in defaults.socket_findings(short / "s.sock", uid)))
         os.chmod(short, 0o755)
 
     def test_doctor_exit_code(self):
@@ -319,7 +319,7 @@ class AgentCommandTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env), mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())):
             out = _io.StringIO()
             with redirect_stdout(out):
-                self.assertEqual(cli.main(["agent", "add", "research", "--harness", "codex", "--role", "Recherche"]), 0)
+                self.assertEqual(cli.main(["agent", "add", "research", "--harness", "codex", "--role", "Research"]), 0)
                 self.assertEqual(cli.main(["agent", "add", "ag1", "--harness", "agy"]), 0)
             with redirect_stderr(_io.StringIO()):
                 self.assertEqual(cli.main(["agent", "add", "ag2", "--harness", "agy"]), 1)      # one agy per machine
@@ -444,6 +444,7 @@ class HerdrFromTheVendorTest(unittest.TestCase):
         herdr_app(ctx.paths, version="0.1.13")
         self.assertEqual(compat.installed_versions(ctx.paths), ("0.1.13", None))
         self.assertEqual(compat.check("0.1.13", None), [compat.Finding("herdr", compat.OK, "Herdr 0.1.13 (tested)")])
+        self.assertEqual(compat.check("0.1.16", None), [compat.Finding("herdr", compat.OK, "Herdr 0.1.16 (tested)")])
 
     def test_doctor_has_no_admin_or_cockpit_identity_checks(self):
         token = "bt_TOKEN_cccccccc"

@@ -28,20 +28,20 @@ class SessionsTest(unittest.TestCase):
         home = self.paths.home
         # claude: title from aiTitle, folder by its project dir
         write(home / ".claude/projects" / sessions.claude_project_dir(W) / "11111111-aaaa-bbbb-cccc-000000000001.jsonl",
-              jsonl({"type": "user", "cwd": W, "message": {"content": "erste Frage"}},
-                    {"type": "ai-title", "aiTitle": "Panel bauen\x1b[2J"}))
+              jsonl({"type": "user", "cwd": W, "message": {"content": "first question"}},
+                    {"type": "ai-title", "aiTitle": "Build the panel\x1b[2J"}))
         write(home / ".claude/projects/-tmp/22222222-aaaa-bbbb-cccc-000000000002.jsonl",
-              jsonl({"type": "user", "cwd": "/tmp", "message": {"content": [{"type": "text", "text": "anderswo"}]}}))
+              jsonl({"type": "user", "cwd": "/tmp", "message": {"content": [{"type": "text", "text": "elsewhere"}]}}))
         # codex: injected context is skipped, the panel prefix is replaced by the task
         write(home / ".codex/sessions/2026/11/07/rollout-1.jsonl",
               jsonl({"type": "session_meta", "payload": {"id": "33333333-aaaa-bbbb-cccc-000000000003", "cwd": W}},
                     {"type": "response_item", "payload": {"type": "message", "role": "user",
                                                            "content": [{"type": "input_text", "text": "<environment_context>"}]}},
                     {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
-                        {"type": "input_text", "text": "Melde dich gemäß Präsenzregel in moshi an (x). Dann dein Auftrag von Anna:\n\nTests fixen"}]}}))
+                        {"type": "input_text", "text": "Melde dich gemäß Präsenzregel in moshi an (x). Dann dein Auftrag von Anna:\n\nFix the tests"}]}}))
         # grok: urlencoded folder, summary on top level
         write(home / ".grok/sessions" / quote(W, safe="") / "44444444-aaaa-bbbb-cccc-000000000004/summary.json",
-              json.dumps({"info": {"id": "44444444-aaaa-bbbb-cccc-000000000004"}, "session_summary": "Herdr anpassen",
+              json.dumps({"info": {"id": "44444444-aaaa-bbbb-cccc-000000000004"}, "session_summary": "Adjust Herdr",
                           "updated_at": "2026-11-07T16:13:49Z"}))
         # vibe: no title → first user turn; archived sessions are left out
         vibe = self.paths.standard_vibe_home / "logs/session/unified"
@@ -49,7 +49,7 @@ class SessionsTest(unittest.TestCase):
               json.dumps({"session_id": "55555555-aaaa-bbbb-cccc-000000000005", "title": None,
                           "bumped_at": "2026-11-07T14:39:00Z", "environment": {"working_directory": W}}))
         write(vibe / "55555555-aaaa-bbbb-cccc-000000000005/chunks/a.json",
-              json.dumps([{"message": {"role": "user", "content": [{"type": "text", "text": "Antworte nur mit OK"}]},
+              json.dumps([{"message": {"role": "user", "content": [{"type": "text", "text": "Answer only with OK"}]},
                            "turn_index": 0}]))
         write(vibe / "d0000000-0000-0000-0000-000000000000/meta.json",
               json.dumps({"session_id": "d0000000-0000-0000-0000-000000000000", "archived_at": "2026-11-01",
@@ -61,8 +61,8 @@ class SessionsTest(unittest.TestCase):
                   "WorkspaceURIs": [f"file://{W}"]}}}}))
 
     def test_every_agent_lists_its_session_in_the_folder_with_resume_args(self):
-        expected = {"claude": ("Panel bauen", ["--resume"]), "codex": ("Tests fixen", ["resume"]),
-                    "grok": ("Herdr anpassen", ["--resume"]), "vibe": ("Antworte nur mit OK", ["--resume"]),
+        expected = {"claude": ("Build the panel", ["--resume"]), "codex": ("Fix the tests", ["resume"]),
+                    "grok": ("Adjust Herdr", ["--resume"]), "vibe": ("Answer only with OK", ["--resume"]),
                     "agy": ("Moshi Presence", ["--conversation"])}
         for agent, (title, flag) in expected.items():
             with self.subTest(agent=agent):
@@ -84,6 +84,14 @@ class SessionsTest(unittest.TestCase):
               json.dumps({"session_id": "../../etc/passwd", "environment": {"working_directory": W}}))
         ids = [s["id"] for s in sessions.list_sessions("vibe", self.paths, None)]
         self.assertEqual(ids, ["55555555-aaaa-bbbb-cccc-000000000005"])
+
+    def test_the_old_panel_prefix_is_recognised_in_both_wordings(self):
+        for prefix, task in (("Melde dich gemäß Präsenzregel in moshi an (x). ", "Dann dein Auftrag von Sam:"),
+                             ("Sign in to moshi as the presence rule says (x). ", "Then your task from Sam:")):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(sessions._readable(f"{prefix}{task}\n\nFix the tests"), "Fix the tests")
+                self.assertEqual(sessions._readable(prefix.strip()), "(signed in, no task)")
+        self.assertEqual(sessions._readable("Fix the tests"), "Fix the tests")
 
     def test_long_titles_are_cut(self):
         title = sessions.list_sessions("claude", self.paths, W)[0]["title"]
@@ -151,8 +159,8 @@ class CodexRenameTest(unittest.TestCase):
         paths = temp_paths(self)
         message = lambda text: {"type": "response_item", "payload": {"type": "message", "role": "user",
                                                                      "content": [{"type": "input_text", "text": text}]}}
-        self.rollout(paths, message("# AGENTS.md instructions for /Users/x/w\n\nRegeln"), message("Bau mir das Panel"))
-        self.assertEqual(sessions.read_codex(paths, None, 5)[0]["title"], "Bau mir das Panel")
+        self.rollout(paths, message("# AGENTS.md instructions for /Users/x/w\n\nRules"), message("Build me the panel"))
+        self.assertEqual(sessions.read_codex(paths, None, 5)[0]["title"], "Build me the panel")
 
 
 class VibeHomeTest(unittest.TestCase):  # the standard entry and an own agent keep separate profiles
@@ -164,8 +172,8 @@ class VibeHomeTest(unittest.TestCase):  # the standard entry and an own agent ke
                                                "environment": {"working_directory": W}}))
         write(root / "chunks/a.json", json.dumps([{"skills": []}]))
         write(root / "journal/0000000000000001.jsonl",
-              json.dumps({"type": "x", "payload": {"params": {"entries": [{"role": "user", "content": "Baue den Test"}]}}}) + "\n")
-        self.assertEqual(sessions.list_sessions("vibe", paths, None)[0]["title"], "Baue den Test")
+              json.dumps({"type": "x", "payload": {"params": {"entries": [{"role": "user", "content": "Build the test"}]}}}) + "\n")
+        self.assertEqual(sessions.list_sessions("vibe", paths, None)[0]["title"], "Build the test")
 
     def test_a_journal_line_that_is_no_object_does_not_break_the_list(self):
         paths = temp_paths(self)

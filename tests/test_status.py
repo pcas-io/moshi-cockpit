@@ -137,9 +137,21 @@ class RunTakeoverTest(ConnectedHerdr, unittest.TestCase):
         self.other, _ = self.moshi.add_installation("Home Mac")
         self.moshi.requests.clear()
 
-    def run_cli(self, *argv):
-        with mock.patch.object(launch, "run_agent") as started:
+    def run_cli(self, *argv, terminal=False, answers=()):
+        """`run` with the start prepared and exec'd by fakes; `started` records what would replace the process.
+        terminal=True: a TTY on both ends, `answers` are typed at each prompt."""
+        typed = iter(answers)
+        prompts = []
+
+        def ask(prompt=""):
+            prompts.append(prompt)
+            return next(typed)
+
+        with mock.patch.object(launch, "prepare", side_effect=lambda paths, keychain, name, extra: (name, list(extra))), \
+                mock.patch.object(launch, "execute") as started, \
+                mock.patch("cockpit.cli._on_terminal", return_value=terminal), mock.patch("builtins.input", ask):
             code, out, err = self.cli("run", *argv)
+        self.prompts = prompts
         return code, out, err, started
 
     def holder(self):
@@ -162,7 +174,7 @@ class RunTakeoverTest(ConnectedHerdr, unittest.TestCase):
         self.assertEqual([c["auth"] for c in self.moshi.calls("POST", "/api/agent/activate")], [f"Bearer {self.token}"])
         self.assertEqual(self.moshi.calls("GET", "/api/installation/status")[0]["auth"], f"Bearer {self.device_key}")
         self.assertEqual(self.holder(), self.installation["id"])
-        self.assertEqual(started.call_args.args[2:], ("scout", ["exec", "hi"]))
+        self.assertEqual(started.call_args.args[0], ("scout", ["exec", "hi"]))
         self.assert_no_secret(out, err)
 
     def test_take_over_also_works_before_the_agent_name(self):
@@ -170,7 +182,7 @@ class RunTakeoverTest(ConnectedHerdr, unittest.TestCase):
         code, _, err, started = self.run_cli("--take-over", "scout", "exec")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.holder(), self.installation["id"])
-        self.assertEqual(started.call_args.args[2:], ("scout", ["exec"]))
+        self.assertEqual(started.call_args.args[0], ("scout", ["exec"]))
 
     def test_run_activates_silently_when_nobody_holds_the_agent(self):
         self.moshi.agent("scout")["active_installation_id"] = None  # freshly loaded: not_active until activated
@@ -189,7 +201,7 @@ class RunTakeoverTest(ConnectedHerdr, unittest.TestCase):
         self.api = closed_port_api()
         code, out, err, started = self.run_cli("scout", "exec")
         self.assertEqual((code, out, err.strip()), (0, "", UNREACHABLE_LINE))
-        self.assertEqual(started.call_args.args[2:], ("scout", ["exec"]))
+        self.assertEqual(started.call_args.args[0], ("scout", ["exec"]))
 
     def test_run_with_a_dead_agent_token_points_at_load_and_does_not_start(self):
         self.moshi.agent_tokens[self.token]["revoked"] = True
@@ -213,6 +225,50 @@ class RunTakeoverTest(ConnectedHerdr, unittest.TestCase):
         code, out, err, started = self.run_cli("elder")
         self.assertEqual((code, out, err), (0, "", ""))
         started.assert_called_once()
+
+    def test_a_missing_binary_takes_nothing_over(self):
+        self.moshi.agent("scout")["active_installation_id"] = self.other["id"]
+        with mock.patch.object(launch.shutil, "which", return_value=None), \
+                mock.patch.object(launch, "execute") as started, mock.patch("cockpit.cli._on_terminal", return_value=False):
+            code, out, err = self.cli("run", "scout", "--take-over")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("codex is not found on your PATH", err)
+        started.assert_not_called()
+        self.assertEqual(self.moshi.calls("POST", "/api/agent/activate"), [])
+        self.assertEqual(self.moshi.requests, [])  # moshi was not even asked
+        self.assertEqual(self.holder(), self.other["id"])
+
+    def test_on_a_terminal_run_asks_before_it_takes_over(self):
+        self.moshi.agent("scout")["active_installation_id"] = self.other["id"]
+        code, out, err, started = self.run_cli("scout", terminal=True, answers=["y"])
+        self.assertEqual((code, out), (0, ""), err)
+        self.assertEqual(self.prompts, ["Running on Home Mac. Take over here? [y/N] "])
+        self.assertEqual(self.holder(), self.installation["id"])
+        started.assert_called_once()
+
+    def test_on_a_terminal_anything_but_yes_starts_nothing(self):
+        self.moshi.agent("scout")["active_installation_id"] = self.other["id"]
+        for answer in ("", "n", "later"):
+            with self.subTest(answer=answer):
+                code, out, _, started = self.run_cli("scout", terminal=True, answers=[answer])
+                self.assertEqual((code, out), (4, ""))  # no JSON: a person answered, not the panel
+                started.assert_not_called()
+                self.assertEqual(self.holder(), self.other["id"])
+        self.assertEqual(self.moshi.calls("POST", "/api/agent/activate"), [])
+
+    def test_a_failure_on_a_terminal_waits_for_enter(self):
+        self.moshi.agent_tokens[self.token]["revoked"] = True
+        code, _, err, started = self.run_cli("scout", terminal=True, answers=[""])
+        self.assertEqual(code, 1)
+        self.assertIn("moshi-cockpit agent load scout", err)
+        self.assertEqual(self.prompts, ["\nPress Enter to close this tab. "])
+        started.assert_not_called()
+
+    def test_a_missing_approval_on_a_terminal_exits_3_after_enter(self):
+        self.moshi.revoke_installation(self.installation["id"])
+        code, _, _, started = self.run_cli("scout", terminal=True, answers=[""])
+        self.assertEqual((code, self.prompts), (3, ["\nPress Enter to close this tab. "]))
+        started.assert_not_called()
 
     def test_run_without_a_moshi_token_asks_moshi_nothing(self):
         self.connected(agents=[{"name": "solo", "harness": "codex"}])

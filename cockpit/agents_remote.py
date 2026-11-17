@@ -28,7 +28,9 @@ APPROVAL = "This Herdr needs a new approval from moshi: run moshi-cockpit connec
 NAME_TAKEN = "That name is taken in moshi."
 UNREACHABLE = "Could not reach moshi. Check the network and try again."
 PROFILE = "moshi refused the role or skill (role: one line, at most 64 characters; skill: letters, digits, _ and -)."
-DEAD_TOKEN = 'moshi no longer accepts the token of {name} on this Mac: remove the agent here and load it again with "+ Agent".'
+# One text for the CLI and the panel (`run`, `agent set`).
+DEAD_TOKEN = ('moshi no longer accepts the token of {name} on this Mac: remove the agent here and load it again '
+              '(moshi-cockpit agent remove {name}, then moshi-cockpit agent load {name}, or "+ Agent" in Herdr).')
 
 
 class ApprovalRequired(RuntimeError):
@@ -102,9 +104,10 @@ def create(ctx: AgentContext, name: str, harness: str, role: str = "", skill: st
         raise _registration_refusal(exc, draft.name) from None
     try:
         agent = _store(ctx, config, draft, token)
-    except (ValueError, KeychainError) as exc:  # the agent exists in moshi now: it can be loaded later
+    except (ValueError, KeychainError, OSError) as exc:  # the agent exists in moshi now: it can be loaded later
         _discard(api, token)
-        raise type(exc)(f"{str(exc).rstrip('.')}. Load it with: moshi-cockpit agent load {draft.name}") from None
+        kind = ValueError if isinstance(exc, OSError) else type(exc)
+        raise kind(f"{_failure_text(exc).rstrip('.')}. Load it with: moshi-cockpit agent load {draft.name}") from None
     return _finish(ctx, agent)
 
 
@@ -124,7 +127,7 @@ def load(ctx: AgentContext, name: str, api: Optional[MoshiApi] = None) -> Agent:
         raise _registration_refusal(exc, name) from None
     try:
         agent = _store(ctx, config, _from_profile(ctx, profile, name), token)
-    except (ValueError, KeychainError):
+    except (ValueError, KeychainError, OSError):
         _discard(api, token)
         raise
     return _finish(ctx, agent)
@@ -187,6 +190,13 @@ def _copy_ocellio(ctx: AgentContext, config: Config, name: str) -> bool:
         return False
     ctx.keychain.write(keychain_service("ocellio", name), name, ctx.keychain.read(*OCELLIO_ENTRY))
     return True
+
+
+def _failure_text(exc: Exception) -> str:
+    """One readable sentence: a file error as "<reason>: <path>", not "[Errno 13] …"."""
+    if isinstance(exc, OSError) and exc.strerror:
+        return f"{exc.strerror}: {exc.filename}" if exc.filename else exc.strerror
+    return str(exc)
 
 
 def _discard(api: MoshiApi, token: str) -> None:

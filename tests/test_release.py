@@ -1,6 +1,7 @@
 """tools/release.sh: refuses unless the tree is clean, HEAD is the tag, the tag is on origin/main, the version
 matches and the checks pass; builds the payload, the rendered installer, SHA256SUMS and the notes, runs the
-leak guard over the notes and creates the release only after a yes on a terminal.
+leak guard over the notes and creates the release only after a yes on a terminal, and only when origin holds the
+same tag.
 
 `git`, `gh` and tools/check.sh are fakes in a copy of the tools: nothing real is called or published."""
 
@@ -43,6 +44,10 @@ elif args[:1] == ["rev-parse"]:
     print(state["tag_commit"])
 elif args[:1] == ["fetch"]:
     pass
+elif args[:1] == ["ls-remote"]:
+    if state.get("ls_remote_fails"):
+        sys.exit(2)
+    sys.stdout.write(state["remote_tag"])
 elif args[:2] == ["merge-base", "--is-ancestor"]:
     sys.exit(0 if state["on_main"] and args[2] == state["tag_commit"] and args[3] == "origin/main" else 1)
 elif args[:1] == ["archive"]:
@@ -83,7 +88,9 @@ class ReleaseTest(unittest.TestCase):
             (self.fakes / name).chmod(0o755)
         self.words = self.tmp / "words.txt"
         self.words.write_text(WORD + "\n")
-        self.state = {"status": "", "tag": TAG, "tag_commit": COMMIT, "head": COMMIT, "on_main": True}
+        # origin holds the same annotated tag: the tag object, then the commit it peels to
+        self.state = {"status": "", "tag": TAG, "tag_commit": COMMIT, "head": COMMIT, "on_main": True,
+                      "remote_tag": f"{'9' * 40}\trefs/tags/{TAG}\n{COMMIT}\trefs/tags/{TAG}^{{}}\n"}
         self.log = self.tmp / "git.log"
         self.gh_call = self.tmp / "gh-call"
 
@@ -160,7 +167,8 @@ class ReleaseTest(unittest.TestCase):
                       notes)
         self.assertIn(sums.strip(), notes)
         archive = [c for c in self.git_calls() if c[1] == "archive"][0]
-        self.assertEqual(archive[-4:], [TAG, "cockpit", "bin", "share"])
+        self.assertEqual(archive[-5:], [TAG, "cockpit", "bin", "share", "LICENSE"])
+        self.assertIn(["git", "ls-remote", "origin", f"refs/tags/{TAG}", f"refs/tags/{TAG}^{{}}"], self.git_calls())
         self.assertIn(f"--prefix=moshi-cockpit-{VERSION}/", archive)
         with tarfile.open(self.dist / f"moshi-cockpit-{VERSION}.tar.gz") as tar:
             self.assertEqual(tar.getnames(), [f"moshi-cockpit-{VERSION}/bin/moshi-cockpit"])
@@ -218,6 +226,27 @@ class ReleaseTest(unittest.TestCase):
         done = self.release(TAG)
         self.assert_refused(done, "tools/check.sh failed")
         self.assertFalse(self.dist.exists())
+
+    def test_a_lightweight_tag_on_origin_counts_by_its_commit(self):
+        self.state["remote_tag"] = f"{COMMIT}\trefs/tags/{TAG}\n"
+        done = self.release_on_terminal(b"y\n", TAG)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(self.gh_call.exists())
+
+    def test_refuses_when_origin_has_no_such_tag(self):
+        self.state["remote_tag"] = ""
+        self.assert_refused(self.release_on_terminal(b"y\n", TAG), f"git push origin {TAG}")
+
+    def test_refuses_when_the_tag_on_origin_points_elsewhere(self):
+        for remote in (f"{OTHER}\trefs/tags/{TAG}\n",
+                       f"{COMMIT}\trefs/tags/{TAG}\n{OTHER}\trefs/tags/{TAG}^{{}}\n"):
+            with self.subTest(remote=remote):
+                self.state["remote_tag"] = remote
+                self.assert_refused(self.release_on_terminal(b"y\n", TAG), "on origin")
+
+    def test_refuses_when_origin_cannot_be_asked_for_the_tag(self):
+        self.state["ls_remote_fails"] = True
+        self.assert_refused(self.release_on_terminal(b"y\n", TAG), "could not ask origin")
 
     def test_refuses_a_malformed_version(self):
         for bad in ("1.2.3", "v1.2", "v1.2.3-rc1", ""):

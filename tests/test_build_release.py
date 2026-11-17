@@ -9,6 +9,7 @@ import hashlib
 import http.server
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -246,12 +247,14 @@ class InstallerRunTest(unittest.TestCase):
         self.assertIn("--moshii", done.stderr)
         self.assertEqual(self.server.requests, [])
 
-    def test_with_a_terminal_it_asks_for_both_addresses_on_dev_tty(self):
+    def run_on_terminal(self, typed: bytes):
+        """The rendered script with a pty as its controlling terminal, as a real shell would have; `typed` is
+        already waiting there. Returns the process and what the script printed on the terminal."""
         self.serve()
         master, slave = os.openpty()
         self.addCleanup(os.close, master)
 
-        def own_terminal():  # the child gets the pty as its controlling terminal, as a real shell would
+        def own_terminal():
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
@@ -269,18 +272,33 @@ class InstallerRunTest(unittest.TestCase):
 
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
-        os.write(master, b"https://moshi.example.test/mcp\n\n")  # moshi given, ocellio left empty
+        os.write(master, typed)
         env = {"PATH": SYSTEM_PATH, "HOME": str(self.home)}
         proc = subprocess.Popen(["sh", "-s"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, env=env, preexec_fn=own_terminal, pass_fds=(slave,))
-        out, err = proc.communicate(self.script().encode(), timeout=60)
+        _, err = proc.communicate(self.script().encode(), timeout=60)
         os.close(slave)
         reader.join(timeout=5)
         self.assertEqual(proc.returncode, 0, err.decode())
-        prompts = seen.decode(errors="replace")
+        return seen.decode(errors="replace")
+
+    def test_with_a_terminal_it_asks_for_both_addresses_on_dev_tty(self):
+        prompts = self.run_on_terminal(b"https://moshi.example.test/mcp\n\n")  # moshi given, ocellio left empty
         self.assertIn("moshi address (leave empty to use Herdr without moshi):", prompts)
         self.assertIn("ocellio address (leave empty to skip):", prompts)
         self.assertEqual(self.called()[1:], ["install", "--moshi", "https://moshi.example.test/mcp", "tty"])
+
+    def test_an_update_shows_the_current_addresses_and_keeps_them_on_empty_input(self):
+        settings = self.home / ".config" / "moshi-cockpit"
+        settings.mkdir(parents=True)
+        (settings / "config.json").write_text(json.dumps({"servers": {
+            "moshi": "https://moshi.example.test/mcp", "ocellio": "https://ocellio.example.test/mcp/\x1b[2J"}}))
+        prompts = self.run_on_terminal(b"\n\n")
+        self.assertIn("moshi address [current: https://moshi.example.test/mcp] (leave empty to keep it):", prompts)
+        self.assertIn("ocellio address [current: https://ocellio.example.test/mcp/[2J] (leave empty to keep it):",
+                      prompts)  # control characters from the file never reach the terminal
+        self.assertNotIn("\x1b[2J", prompts)
+        self.assertEqual(self.called()[1:], ["install", "tty"])  # no flag: install keeps both
 
 
 if __name__ == "__main__":

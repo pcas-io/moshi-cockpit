@@ -288,7 +288,7 @@ export default class MeshAgents extends View {
     return Input.new(state).w_full().h(32).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12);
   }
 
-  // A harness: selectable when installed and free; greyed with its reason; missing → greyed with Install.
+  // A harness: selectable when the CLI finds it and it is free; greyed with its reason; missing → greyed with Install.
   harnessChip(t, h) {
     if (h.selectable) {
       return btn(`agent-h-${h.name}`, t, h.label, (_e, cx) => { this.harness = h.name; this.problem = null; cx.notify(); },
@@ -305,7 +305,7 @@ export default class MeshAgents extends View {
 
   newTab(t) {
     const rows = harnessRows(this.data?.harnesses, this.known, cli());
-    const refused = rows.filter((h) => h.installed && !h.selectable && h.note);
+    const refused = rows.filter((h) => (h.installed || h.herdrOnly) && !h.selectable && h.note);
     return v_flex().w_full().gap(10)
       .child(this.input(t, this.name))
       .child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(6).items_center()
