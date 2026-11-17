@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from cockpit import agents, compat, defaults
+from cockpit import agents, compat, defaults, legacy
 from cockpit.agents import AgentContext
 from cockpit.config import SERVERS, _read, load_config, origin, save_servers, validate_url
 from cockpit.defaults import load_json
@@ -178,7 +178,8 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
         now: Callable[[], float] = time.monotonic) -> List[str]:
     if not ctx.paths.herdr_app_bundle.is_dir():
         raise ValueError(HERDR_MISSING)  # before anything is written
-    notes: List[str] = []
+    moved = legacy.import_config(ctx.paths, ctx.backup, ctx.keychain)  # before this install writes its own
+    notes: List[str] = list(moved)
     if defaults.ensure_telemetry_off(ctx.paths, ctx.backup):
         notes.append("Herdr: telemetry switched off")
     else:
@@ -210,4 +211,6 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
     notes.extend(setup_agents(ctx))
     if first_start:
         notes.append(show_cockpit_layout(ctx.paths, runner) if ready else HERDR_NOT_READY)
+    if moved:
+        notes.append(legacy.FOUND)
     return notes
