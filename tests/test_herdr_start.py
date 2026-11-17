@@ -13,7 +13,7 @@ from cockpit import cli, defaults, installer
 from tests.helpers import MAIN_LAYOUT as MAIN, herdr_app
 from tests.test_agents_doctor import context
 
-LAYOUT_SKIPPED = "Layout cockpit: übersprungen"  # defaults.py's own note (translated in a later change)
+LAYOUT_SKIPPED = "Cockpit layout: skipped"  # defaults.py's own note
 
 
 class Clock:
@@ -140,7 +140,7 @@ class StartTest(unittest.TestCase):
         self.assertEqual(self.clock.time, 0)
 
     def test_only_a_named_layout_counts_as_ready(self):
-        waiting = [result(1), result(0, "kein json"), result(0, "[]"), result(0, '{"layout": ""}'), result(0, '{"layout": null}'),
+        waiting = [result(1), result(0, "no json"), result(0, "[]"), result(0, '{"layout": ""}'), result(0, '{"layout": null}'),
                    subprocess.TimeoutExpired("x", 5), OSError("weg")]
         fake = FakeHerdr(self.ctx.paths, statuses=waiting)
         notes = self.install(fake)

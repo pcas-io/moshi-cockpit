@@ -157,6 +157,25 @@ class RemoteAgentsTest(ConnectedHerdr, unittest.TestCase):
         agents_remote.load(self.ctx, "scout", api=self.api)  # the way out works
         self.assertEqual(len(self.live_tokens("scout")), 1)
 
+    def test_a_file_error_here_drops_the_new_token_and_ends_in_one_line(self):
+        with mock.patch("cockpit.registry.add", side_effect=PermissionError(13, "Permission denied", "/x/agents.json")):
+            code, out, err = self.cli("agent", "add", "scout", "--harness", "codex")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(len(err.strip().splitlines()), 1, err)
+        self.assertIn("Load it with: moshi-cockpit agent load scout", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(self.live_tokens("scout"), [])
+        self.assertNotIn(("moshi-scout", "scout"), self.fake.entries)
+        self.assert_no_secret(out, err)
+
+    def test_a_file_error_while_loading_drops_the_new_token(self):
+        self.moshi.add_agent("writer", harness="codex")
+        with mock.patch("cockpit.registry.add", side_effect=OSError(28, "No space left on device")):
+            code, _, err = self.cli("agent", "load", "writer")
+        self.assertEqual(code, 1)
+        self.assertIn("No space left on device", err)
+        self.assertEqual(self.live_tokens("writer"), [])
+
     def test_without_moshi_the_agent_is_local_only(self):
         configure(self.ctx.paths, servers={})
         agent = agents_remote.create(self.ctx, "solo", "codex", api=self.api)

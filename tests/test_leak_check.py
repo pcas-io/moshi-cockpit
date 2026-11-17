@@ -140,15 +140,43 @@ class LeakCheckTest(unittest.TestCase):
         self.assertEqual((code, out), (1, "bad.md:1: email\n"))
 
     def test_leak_check_flags_a_blocked_word_in_a_commit_message_and_a_private_author_email(self):
-        clean = "cosrv\ncosrv@users.noreply.github.com\ncosrv\ncosrv@users.noreply.github.com\nchore: initial import\n"
-        dirty = (f"cosrv\n{PRIVATE_EMAIL}\ncosrv\ncosrv@users.noreply.github.com\n"
+        clean = f"{'0' * 40}\ncosrv\ncosrv@users.noreply.github.com\ncosrv\ncosrv@users.noreply.github.com\nchore: initial import\n"
+        dirty = (f"{'0' * 40}\ncosrv\n{PRIVATE_EMAIL}\ncosrv\ncosrv@users.noreply.github.com\n"
                  f"feat: talk to {WORD}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
         git = FakeGit({"a" * 40: clean, "b" * 40: dirty})
         code, out = self.run_guard(["--commits", "origin/main..HEAD"], git=git)
         self.assertEqual(code, 1)
         self.assertEqual(out.splitlines(), [f"commit {'b' * 12}:2: email", f"commit {'b' * 12}:5: blocked-word"])
         self.assertIn(["rev-list", "origin/main..HEAD"], git.calls)
-        self.assertIn(["show", "-s", "--format=%an%n%ae%n%cn%n%ce%n%B", "b" * 40], git.calls)
+        self.assertIn(["show", "-s", "--format=%P%n%an%n%ae%n%cn%n%ce%n%B", "b" * 40], git.calls)
+
+    def test_githubs_own_merge_commits_pass_and_nothing_else_is_let_through(self):
+        me, gh = "cosrv\ncosrv@users.noreply.github.com", "GitHub\nnoreply" + "@github.com"
+        two = f"{'1' * 40} {'2' * 40}"
+
+        def commit(parents, author, committer, message):
+            return f"{parents}\n{author}\n{committer}\n{message}\n"
+
+        merge = commit(two, me, gh, f"Merge pull request {HASH}12 from cosrv/fix-sidebar\n\nfix: the sidebar line")
+        history = {"a" * 40: commit("0" * 40, me, me, "chore: initial import"), "b" * 40: merge,
+                   "c" * 40: commit(two, gh, gh, f"Merge pull request {HASH}3 from cosrv/docs")}
+        code, out = self.run_guard(["--commits", "c410f3e..HEAD"], git=FakeGit(history))
+        self.assertEqual((code, out), (0, ""))
+        bad = {
+            "d" * 40: commit(two, me, gh, f"Merge pull request {HASH}13 from cosrv/{WORD}"),  # a word in the branch
+            "e" * 40: commit(two, me, gh, f"Merge pull request {HASH}14 from cosrv/x\n\nsee {SHORT_ID}"),  # the body
+            "f" * 40: commit("0" * 40, me, gh, f"Merge pull request {HASH}15 from cosrv/x"),  # not a merge
+            "1" * 40: commit(two, me, me, f"Merge pull request {HASH}16 from cosrv/x"),  # not GitHub's committer
+            "2" * 40: commit(two, me, gh, f"Merge branch 'main' into x, closes {HASH}17"),  # not GitHub's subject
+            "3" * 40: commit("0" * 40, gh, me, "feat: a commit by noreply"),  # GitHub's address elsewhere
+        }
+        code, out = self.run_guard(["--commits", "c410f3e..HEAD"], git=FakeGit({**history, **bad}))
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), [
+            f"commit {'d' * 12}:5: blocked-word", f"commit {'e' * 12}:7: ocellio-id",
+            f"commit {'f' * 12}:4: email", f"commit {'f' * 12}:5: issue-ref",
+            f"commit {'1' * 12}:5: issue-ref", f"commit {'2' * 12}:4: email", f"commit {'2' * 12}:5: issue-ref",
+            f"commit {'3' * 12}:2: email"])
 
     def test_leak_check_passes_a_clean_tree(self):
         self.write("README.md", "# moshi-cockpit\n\nPlain text, no ids, mail a@example.test.\n")

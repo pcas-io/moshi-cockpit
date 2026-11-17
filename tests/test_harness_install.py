@@ -151,5 +151,30 @@ class HarnessInstallTest(unittest.TestCase):
         self.assertEqual((args.command, args.name), ("harness", "grok"))
 
 
+class HarnessTabTest(unittest.TestCase):
+    """`harness install` runs in a Herdr tab, which closes with the process: on a terminal it waits for Enter."""
+
+    def setUp(self):
+        self.paths = temp_paths(self)
+
+    def run_cli(self, code, terminal):
+        prompts = []
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=self.paths), \
+                mock.patch("cockpit.cli._on_terminal", return_value=terminal), \
+                mock.patch.object(harness_install, "run_cli", return_value=code) as ran, \
+                mock.patch("builtins.input", lambda prompt="": prompts.append(prompt) or ""):
+            result = cli.main(["harness", "install", "codex"])
+        self.assertEqual(ran.call_args.args[2].interactive, terminal)
+        return result, prompts
+
+    def test_on_a_terminal_success_and_failure_both_wait_for_enter(self):
+        for code in (0, 1):
+            with self.subTest(code=code):
+                self.assertEqual(self.run_cli(code, True), (code, ["\nPress Enter to close this tab. "]))
+
+    def test_without_a_terminal_nothing_waits(self):
+        self.assertEqual(self.run_cli(1, False), (1, []))
+
+
 if __name__ == "__main__":
     unittest.main()

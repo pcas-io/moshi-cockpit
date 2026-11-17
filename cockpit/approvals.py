@@ -53,7 +53,7 @@ def _switches_off(value: str, key: str) -> bool:
 # long letter runs ending in a digit (found in review: 26 letters + "1" took 2.6 s). camelCase is
 # already covered by [A-Za-z]+, so a mandatory separator is equivalent and linear.
 _PLAIN_KEY = re.compile(r"[A-Za-z]+(?:[_-][A-Za-z]+)*")
-MASKED_KEY = "<verborgen>"
+MASKED_KEY = "<hidden>"
 
 
 def _shown_key(name: object) -> str:
@@ -94,11 +94,11 @@ def agy_findings(paths: Paths) -> List[str]:
     rules = (settings.get("permissions") or {}).get("allow") or [] if isinstance(settings, dict) else []
     granting = sorted(r for r in rules if agy_rule_grants_ask(r))
     if granting:
-        findings.append(f"agy: Freigaben beantworten Nachfrage-Tools für dich: {granting}")
+        findings.append(f"agy: allow rules answer tools that should ask you: {granting}")
     skips = _truthy_skip_keys(settings)
     if skips:
         shown = ", ".join(clean(path, "?", limit=120) for path in skips)
-        findings.append(f"agy: Einstellungen schalten vermutlich das Nachfragen ab (Werte nicht angezeigt): {shown}")
+        findings.append(f"agy: settings probably switch asking off (values not shown): {shown}")
     return findings
 
 
@@ -112,10 +112,10 @@ def grok_findings(paths: Paths) -> List[str]:
     findings = []
     mode = re.search(r"""^\s*permission_mode\s*=\s*["']([^"']*)["']""", text, re.M)
     if mode and mode.group(1) in GROK_UNSAFE_MODES:
-        findings.append(f'grok: permission_mode = "{mode.group(1)}" gibt alle Tools ohne Nachfrage frei '
-                        "(der Start über moshi-cockpit überschreibt das, ein direkter grok-Start nicht)")
+        findings.append(f'grok: permission_mode = "{mode.group(1)}" approves every tool without asking '
+                        "(a start through moshi-cockpit overrides it, a direct grok start does not)")
     if re.search(r"^\s*yolo\s*=\s*true\b", text, re.M):
-        findings.append("grok: yolo = true gibt alle Tools ohne Nachfrage frei")
+        findings.append("grok: yolo = true approves every tool without asking")
     return findings
 
 

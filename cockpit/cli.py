@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
@@ -100,20 +101,56 @@ def _context(paths: Paths) -> AgentContext:
     return AgentContext(paths=paths, backup=BackupStore(paths.state), keychain=default_store())
 
 
+def _on_terminal() -> bool:
+    """A person is looking: a Herdr tab or a terminal, both ends a TTY."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+CLOSE_PROMPT = "Press Enter to close this tab."
+
+
+def _hold_tab() -> None:
+    """A Herdr tab closes with its process: what happened stays readable until Enter."""
+    try:
+        input(f"\n{CLOSE_PROMPT} ")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _ask_take_over(label: str) -> bool:
+    try:
+        answer = input(f"Running on {clean(label, '?', limit=64)}. Take over here? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
 def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
-    """`run <agent> [--take-over] [args…]`: the flag right after the name is ours, everything later the harness's."""
+    """`run <agent> [--take-over] [args…]`: the flag right after the name is ours, everything later the harness's.
+    The start is prepared (command, tokens, binary) before moshi is asked, so a start that cannot happen takes
+    nothing over. On a terminal it asks before a takeover, and a failure waits for Enter."""
     rest, take_over = list(args.rest), args.take_over
     if rest[:1] == [TAKE_OVER]:
         rest, take_over = rest[1:], True
+    terminal = _on_terminal()
     keychain = default_store()
     try:
-        launch.claim(paths, keychain, args.agent, take_over)
+        start = launch.prepare(paths, keychain, args.agent, rest)
+        launch.claim(paths, keychain, args.agent, take_over, confirm=_ask_take_over if terminal else None)
+        launch.execute(start)
     except launch.ActiveElsewhere as exc:
+        if terminal:
+            return ACTIVE_ELSEWHERE_EXIT  # the person said no
         print(json.dumps({"active": exc.label}, ensure_ascii=False))  # stdout stays JSON for the panel
         print(f"{args.agent} is active on {exc.label}. To start it here: moshi-cockpit run {args.agent} {TAKE_OVER}",
               file=sys.stderr)
         return ACTIVE_ELSEWHERE_EXIT
-    launch.run_agent(paths, keychain, args.agent, rest)
+    except FAILURES as exc:
+        if not terminal:
+            raise
+        code = report(exc)
+        _hold_tab()
+        return code
     return 0  # not reached: exec
 
 
@@ -130,10 +167,20 @@ def cmd_install(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
-    notes = BackupStore(paths.state).restore_all()
+    """Undoes every change outside the person's own settings folder; that folder and the Keychain stay."""
+    settings = paths.mesh_config.parent
+    notes = BackupStore(paths.state).restore_all(keep=settings)
     for note in notes or ["nothing to restore"]:
         print(f"• {note}")
-    print("Note: Keychain entries and Herdr itself stay.")
+    app = paths.home / ".local" / "share" / "moshi-cockpit"
+
+    def short(path: Path) -> str:
+        return "~/" + str(path.relative_to(paths.home)) if paths.home in path.parents else str(path)
+
+    print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), the Keychain entries "
+          f"(moshi-… and ocellio-…), the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself.")
+    print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, delete the moshi-… "
+          "and ocellio-… entries in Keychain Access, and revoke this installation in the moshi dashboard.")
     return 0
 
 
@@ -187,10 +234,7 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
         print("\nCancelled.", file=sys.stderr)
         wait = False
     if wait and sys.stdin.isatty():
-        try:
-            input("\nEnter closes this tab. ")
-        except (EOFError, KeyboardInterrupt):
-            pass
+        _hold_tab()
     return code
 
 
@@ -271,10 +315,7 @@ def _agent_list(ctx: AgentContext, args: argparse.Namespace) -> int:
     found = load_agents(paths, enforce=False)
     if args.json:
         config = load_config(paths)
-        # The panel still shows an agent's moshi name, which is its name, until the mods follow.
-        agents = [dict(a, moshi_name=a["name"] if config.has("moshi") else "")
-                  for a in status.local_agents(paths, config, ctx.keychain)]
-        print(json.dumps({"agents": agents,
+        print(json.dumps({"agents": status.local_agents(paths, config, ctx.keychain),
                           "harnesses": wizard.harness_offer(paths),
                           "servers": {name: config.has(name) for name in SERVERS}}, ensure_ascii=False))
         return 0
@@ -327,7 +368,17 @@ def cmd_sessions(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_harness(args: argparse.Namespace, paths: Paths) -> int:
-    return harness_install.run_cli(args.name, paths, harness_install.InstallIO(interactive=sys.stdin.isatty() and sys.stdout.isatty()))
+    """Runs in a tab of its own: on a terminal the outcome waits for Enter, success or failure."""
+    interactive = _on_terminal()
+    try:
+        code = harness_install.run_cli(args.name, paths, harness_install.InstallIO(interactive=interactive))
+    except FAILURES as exc:
+        if not interactive:
+            raise
+        code = report(exc)
+    if interactive:
+        _hold_tab()
+    return code
 
 
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
@@ -335,19 +386,29 @@ COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_do
             "harness": cmd_harness, "migrate": cmd_migrate}
 
 
+# What a command ends with on a known failure: one line on stderr and an exit code, never a traceback.
+FAILURES = (ApprovalRequired, MoshiError, KeychainError, McpError, ValueError, OSError)
+
+
+def report(exc: BaseException) -> int:
+    """Prints the one line for a failure and returns its exit code (3 for a missing approval)."""
+    if isinstance(exc, ApprovalRequired):
+        print(clean(str(exc), "?", limit=500), file=sys.stderr)
+        return APPROVAL_EXIT
+    if isinstance(exc, MoshiError):
+        exc = agents_remote.refusal(exc)
+    elif isinstance(exc, OSError) and exc.strerror:  # "[Errno 13] …" reads badly; the path stays
+        exc = ValueError(f"{exc.strerror}: {exc.filename}" if exc.filename else exc.strerror)
+    print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
+    return 1
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](args, Paths.from_env())
-    except ApprovalRequired as exc:
-        print(clean(str(exc), "?", limit=500), file=sys.stderr)
-        return APPROVAL_EXIT
-    except MoshiError as exc:
-        print(f"Error: {clean(str(agents_remote.refusal(exc)), '?', limit=500)}", file=sys.stderr)
-        return 1
-    except (KeychainError, McpError, ValueError) as exc:
-        print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
-        return 1
+    except FAILURES as exc:
+        return report(exc)
     except KeyboardInterrupt:
         print("\ncancelled", file=sys.stderr)
         return 130

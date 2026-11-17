@@ -146,6 +146,26 @@ class UrlTest(unittest.TestCase):
                 config.validate_url(bad)
 
 
+    def test_a_server_address_without_a_path_gets_the_mcp_path(self):
+        cases = {("moshi", "https://moshi.example.test"): "https://moshi.example.test/mcp",
+                 ("moshi", "https://moshi.example.test/"): "https://moshi.example.test/mcp",
+                 ("moshi", "https://moshi.example.test:8443"): "https://moshi.example.test:8443/mcp",
+                 ("moshi", "https://moshi.example.test/x/mcp"): "https://moshi.example.test/x/mcp",
+                 ("ocellio", "https://ocellio.example.test"): "https://ocellio.example.test/mcp/",
+                 ("ocellio", "https://ocellio.example.test/mcp/"): "https://ocellio.example.test/mcp/"}
+        for (name, given), stored in cases.items():
+            with self.subTest(given=given):
+                self.assertEqual(config.with_default_path(name, given), stored)
+        with self.assertRaises(ValueError):
+            config.with_default_path("moshi", "http://moshi.example.test")
+
+    def test_install_stores_a_bare_address_with_the_mcp_path(self):
+        ctx, _ = context(self)
+        notes = install(ctx, moshi="https://moshi.example.test")
+        self.assertEqual(config.load_config(ctx.paths).servers, {"moshi": "https://moshi.example.test/mcp"})
+        self.assertIn("Servers: moshi https://moshi.example.test/mcp", notes)
+
+
 class ChildEnvironmentTest(unittest.TestCase):
     def test_only_the_agents_own_token_reaches_the_child(self):
         ctx, _ = context(self, {("moshi-research", "research"): OWN, ("ocellio-research", "research"): OWN,
@@ -177,7 +197,7 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
         ctx, _ = self.ctx()
         for name in self.NAMES:
             with self.subTest(name=name):
-                seen = start(ctx, name, ["Auftrag"])
+                seen = start(ctx, name, ["task"])
                 self.assertEqual(seen["env"]["MESH_MOSHI_TOKEN"], OWN)
                 self.assertNotIn(OWN, " ".join(seen["argv"]))  # in the environment only
                 config_at = seen["argv"].index("--mcp-config")
@@ -190,7 +210,7 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
                 self.assertEqual(settings["deny"], ["mcp__claude_ai_moshi*", "mcp__claude_ai_Moshi*"])
                 self.assertIn("mcp__moshi__mesh_send", settings["allow"])
                 self.assertNotIn("mcp__moshi__mesh_webhook_set", settings["allow"])  # still asks
-                self.assertEqual(seen["argv"][-1], "Auftrag")
+                self.assertEqual(seen["argv"][-1], "task")
                 self.assertNotIn("--disallowedTools", seen["argv"])
 
     def test_claude_gets_its_rules_with_its_own_moshi_name(self):
@@ -216,7 +236,7 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
 
     def test_grok_stays_without_a_token_and_without_the_claude_wiring(self):
         ctx, _ = self.ctx()
-        seen = start(ctx, "g1", ["Auftrag"])
+        seen = start(ctx, "g1", ["task"])
         self.assertNotIn("MESH_MOSHI_TOKEN", seen["env"])
         self.assertNotIn("--mcp-config", seen["argv"])
 
@@ -438,21 +458,20 @@ class OwnRulesTest(unittest.TestCase):  # the person's data rule must persist
         self.assertEqual(config.load_config(self.ctx.paths).rules, "")
 
 
-class MoshiNameTest(unittest.TestCase):
-    def test_an_agents_moshi_name_equals_its_local_name(self):
+class AgentListJsonTest(unittest.TestCase):
+    def test_agent_list_json_has_no_separate_moshi_name(self):  # an agent's moshi name is its name
         from cockpit import cli
-        from cockpit.harnesses import HARNESSES, Ctx
         ctx, _ = context(self)
         configure(ctx.paths, agents=[{"name": "research", "harness": "codex"}])
-        cfg = config.load_config(ctx.paths)
-        agent = registry.find(ctx.paths, "research")
-        self.assertEqual(HARNESSES["codex"].moshi_name(Ctx(paths=ctx.paths, config=cfg, keychain=ctx.keychain), agent),
-                         "research")
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
                 mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), mock.patch("builtins.print") as printed:
             cli.main(["agent", "list", "--json"])
-        self.assertEqual(json.loads(printed.call_args.args[0])["agents"][0]["moshi_name"], "research")  # the panel's
+        agent = json.loads(printed.call_args.args[0])["agents"][0]
+        self.assertEqual(agent["name"], "research")
+        self.assertNotIn("moshi_name", agent)
 
+
+class ConfigPersonTest(unittest.TestCase):
     def test_the_config_has_no_person(self):
         ctx, _ = context(self)
         configure(ctx.paths, agents=[])

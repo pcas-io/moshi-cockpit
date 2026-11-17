@@ -12,10 +12,10 @@ from cockpit.registry import Agent
 
 def vibe_config(servers: dict) -> str:
     """The whole profile, generated from the configured servers. doctor compares byte for byte."""
-    out = ['# Vibe-Profil eines moshi-cockpit-Agents. Erzeugt von moshi-cockpit, nur über `moshi-cockpit run` starten.',
-           "# Tokens kommen aus der macOS-Keychain (Start), nie in diese Datei.",
+    out = ['# Vibe profile of a moshi-cockpit agent. Written by moshi-cockpit; start it only with `moshi-cockpit run`.',
+           "# Tokens come from the macOS Keychain at the start, never from this file.",
            'theme = "auto"',
-           "# Konto-Connectors aus: nur die Identität dieses Agents zählt.",
+           "# Account connectors off: only this agent's identity counts.",
            "enable_connectors = false", ""]
     for name in ("ocellio", "moshi"):
         if name not in servers:
@@ -23,8 +23,8 @@ def vibe_config(servers: dict) -> str:
         out += ["[[mcp_servers]]", f'name = "{name}"', 'transport = "streamable-http"', f'url = "{servers[name]}"',
                 "[mcp_servers.auth]", 'type = "static"', f'api_key_env = "{TOKEN_ENV[name]}"',
                 'api_key_header = "Authorization"', 'api_key_format = "Bearer {token}"', ""]
-    out += ["# Personenmodell: Lesen, Berichte und das Mesh ohne Nachfrage, alles",
-            "# andere fragt nach; ohne Oberfläche lehnt Vibe ab. Kein --auto-approve. Namen: {server}_{tool}."]
+    out += ["# Reading, reports and the mesh run without asking; everything else asks,",
+            "# and without a screen to ask on Vibe refuses. No --auto-approve. Names: {server}_{tool}."]
     for name in ("ocellio", "moshi"):
         if name in servers:
             out += [f'[tools.{name}_{t}]\npermission = "always"' for t in ALWAYS[name]]
@@ -64,8 +64,8 @@ class Vibe(Harness):
     def findings(self, ctx: Ctx, agent: Agent) -> List[str]:
         config = self.home(ctx, agent) / "config.toml"
         if not config.is_file():
-            return [f"{config} fehlt (moshi-cockpit install)"]
+            return [f"{config} is missing (moshi-cockpit install)"]
         if config.read_text() != vibe_config(ctx.config.servers):
-            return [f"Vibe-Profil {config} weicht von dem ab, was moshi-cockpit schreibt (Server, Freigaben); "
-                    "moshi-cockpit install stellt es wieder her"]
+            return [f"Vibe profile {config} differs from what moshi-cockpit writes (servers, approvals); "
+                    "moshi-cockpit install restores it"]
         return []

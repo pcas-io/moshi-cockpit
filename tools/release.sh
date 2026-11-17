@@ -2,9 +2,10 @@
 # Builds and publishes a release from this Mac (there is no CI):  tools/release.sh vX.Y.Z [NOTES_FILE]
 #
 # Refuses unless the working tree is clean, HEAD is the tag, the tag's commit is on origin/main, the version is
-# the one in cockpit/__init__.py and tools/check.sh passes. Then it builds dist/vX.Y.Z/: the payload (git
-# archive of cockpit, bin and share at the tag), install.sh rendered by tools/build_release.py, SHA256SUMS and
-# notes.md (the install line, NOTES_FILE if given, the checksums). The notes go through the leak guard.
+# the one in cockpit/__init__.py, tools/check.sh passes and origin's tag of that name is the same commit. Then it
+# builds dist/vX.Y.Z/: the payload (git archive of cockpit, bin, share and LICENSE at the tag), install.sh
+# rendered by tools/build_release.py, SHA256SUMS and notes.md (the install line, NOTES_FILE if given, the
+# checksums). The notes go through the leak guard.
 # Publishing is the owner's call: it shows what would go out and asks on the terminal, default no. Without a
 # terminal or without a yes nothing is published (exit 1); the built files stay in dist/ to look at.
 set -eu
@@ -38,7 +39,7 @@ sh tools/check.sh || fail "tools/check.sh failed: not released"
 
 rm -rf "$dist"
 mkdir -p "$dist"
-git archive --format=tar.gz --prefix="moshi-cockpit-$version/" -o "$dist/$payload" "$tag" cockpit bin share
+git archive --format=tar.gz --prefix="moshi-cockpit-$version/" -o "$dist/$payload" "$tag" cockpit bin share LICENSE
 python3 tools/build_release.py --version "$version" --payload "$dist/$payload" --out "$dist/install.sh"
 (cd "$dist" && shasum -a 256 install.sh "$payload" > SHA256SUMS)
 
@@ -56,6 +57,14 @@ fence='```'
 } > "$dist/notes.md"
 python3 tools/leak_check.py --text "$dist/notes.md" \
   || fail "the release notes failed the leak guard ($dist/notes.md): fix them, then run this again"
+
+# gh's --verify-tag only asks whether origin has a tag of that name: it must also be this commit.
+remote_tag=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}") || fail "could not ask origin for tag $tag"
+remote_commit=$(printf '%s\n' "$remote_tag" | awk -v ref="refs/tags/$tag^{}" '$2 == ref { print $1 }')
+[ -n "$remote_commit" ] || remote_commit=$(printf '%s\n' "$remote_tag" | awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }')
+[ -n "$remote_commit" ] || fail "tag $tag is not on origin: git push origin $tag, then run this again"
+[ "$remote_commit" = "$commit" ] \
+  || fail "tag $tag on origin is $remote_commit, not $commit: fix the tag on origin, then run this again"
 
 echo "Ready to publish $tag (commit $commit) from $dist:"
 echo "  install.sh  $payload  SHA256SUMS"

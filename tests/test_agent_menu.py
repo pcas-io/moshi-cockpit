@@ -31,7 +31,7 @@ class AgentMenuTest(unittest.TestCase):  # one entry per agent in herdr's "+" me
         self.assertEqual(entry["name"], "claude-code")
         self.assertEqual(entry["run"], [str(ctx.paths.local_bin / "moshi-cockpit"), "run", "claude-code"])
         self.assertEqual(entry["icon"], "icons/claude.svg")
-        self.assertEqual(programs["moshi-cockpit-g1"]["name"], "g1 (kein eigenes moshi)")
+        self.assertEqual(programs["moshi-cockpit-g1"]["name"], "g1 (no moshi identity of its own)")
         self.assertEqual((programs["moshi-cockpit-v1"]["icon"], programs["moshi-cockpit-v1"]["tint"]), ("mesh-icons/vibe.svg", True))
 
     def test_without_moshi_nothing_is_marked_and_no_token_is_ever_written(self):
@@ -55,7 +55,7 @@ class AgentMenuTest(unittest.TestCase):  # one entry per agent in herdr's "+" me
     def test_a_broken_file_is_left_alone(self):
         ctx, target = self.ctx([{"name": "a1", "harness": "codex"}])
         target.write_text("{kaputt")
-        self.assertIn("nicht überschrieben", self.sync(ctx))
+        self.assertIn("not overwritten", self.sync(ctx))
         self.assertEqual(target.read_text(), "{kaputt")
 
     def test_adding_and_removing_an_agent_updates_the_menu(self):
@@ -86,7 +86,7 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         copy = (ctx.paths.herdr_mods / "mesh-tabs" / "main.js").read_text()
         self.assertIn('mod: "mesh-new-menu"', copy)
         self.assertNotIn('mod: "new-menu"', copy)
-        for changed in ("kein passender Aufruf", self.TABS * 2):
+        for changed in ("no matching call", self.TABS * 2):
             ctx = self.ctx(changed)
             self.assertFalse(defaults.install_menu_tabs(ctx.paths, ctx.backup))
             self.assertFalse((ctx.paths.herdr_mods / "mesh-tabs" / "main.js").exists())
@@ -111,7 +111,7 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         (tabs / "main.js").write_text("b " + defaults.TABS_OPENS_MENU)
         self.assertIn("moshi-cockpit install", defaults.menu_findings(ctx.paths)[0])
         (tabs / "main.js").write_text("herdr opens its menu differently now")
-        self.assertIn("Herdrs eigenes Menü", defaults.menu_findings(ctx.paths)[0])
+        self.assertIn("Herdr's own menu", defaults.menu_findings(ctx.paths)[0])
 
     def test_doctor_warns_when_herdr_changes_the_original_menu(self):
         from cockpit import defaults
@@ -129,7 +129,7 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         configure(ctx.paths, agents=[{"name": "a1", "harness": "codex"}])
         target = ctx.paths.herdr_app_home / "programs.json"
         target.write_text('{"programs": ["x"]}')
-        self.assertIn("nicht überschrieben", defaults.sync_agent_menu(ctx.paths, ctx.backup))
+        self.assertIn("not overwritten", defaults.sync_agent_menu(ctx.paths, ctx.backup))
         self.assertEqual(target.read_text(), '{"programs": ["x"]}')
 
     def test_agent_list_json_says_who_is_connected_without_reading_a_token(self):
@@ -170,7 +170,7 @@ class ShellStartTest(unittest.TestCase):  # a wrapper in the person's shell (sta
         configure(ctx.paths, agents=[{"name": "writer", "harness": "claude"}, {"name": "research", "harness": "codex"}])
         seen = {}
         with mock.patch.object(launch.shutil, "which", return_value="/usr/bin/true"):
-            launch.run_agent(ctx.paths, ctx.keychain, name, ["Auftrag; rm x $(y)"], environ={"PATH": "/usr/bin", "SHELL": shell},
+            launch.run_agent(ctx.paths, ctx.keychain, name, ["task; rm x $(y)"], environ={"PATH": "/usr/bin", "SHELL": shell},
                              execve=lambda path, argv, env: seen.update(path=path, argv=argv, env=env),
                              on_terminal=lambda: terminal)
         return seen
@@ -179,7 +179,7 @@ class ShellStartTest(unittest.TestCase):  # a wrapper in the person's shell (sta
         seen = self.run_it("writer")
         self.assertEqual(seen["path"], self.shell)
         self.assertEqual(seen["argv"][:4], [self.shell, "-ic", 'claude "$@"', "claude"])
-        self.assertEqual(seen["argv"][-1], "Auftrag; rm x $(y)")  # one argument, never shell text
+        self.assertEqual(seen["argv"][-1], "task; rm x $(y)")  # one argument, never shell text
         self.assertIn("--settings", seen["argv"])  # the moshi deny rule still travels
         self.assertEqual(seen["env"]["MOSHI_COCKPIT_RUN"], "1")
 
@@ -207,33 +207,33 @@ class VibeStandardEntryTest(unittest.TestCase):  # herdr ships no Vibe: "Start a
 
     def test_adds_the_entry_once_and_keeps_the_others(self):
         from cockpit import defaults
-        ctx, target = self.setup(json.dumps({"programs": {"claude": {"name": "Mein Claude"}}}))
-        self.assertIn("ergänzt", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
-        self.assertIn("unverändert", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
+        ctx, target = self.setup(json.dumps({"programs": {"claude": {"name": "My Claude"}}}))
+        self.assertIn("added", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
+        self.assertIn("unchanged", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         programs = json.loads(target.read_text())["programs"]
-        self.assertEqual(programs["claude"], {"name": "Mein Claude"})
+        self.assertEqual(programs["claude"], {"name": "My Claude"})
         self.assertEqual((programs["vibe"]["run"], programs["vibe"]["icon"]), (["vibe", "--agent", "ask"], "mesh-icons/vibe.svg"))
 
     def test_an_entry_from_an_earlier_install_is_updated(self):
         from cockpit import defaults
         ctx, target = self.setup(json.dumps({"programs": {"vibe": {"icon": defaults.VIBE_ICON, "run": ["vibe"]}}}))
-        self.assertIn("ergänzt", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
+        self.assertIn("added", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         self.assertEqual(json.loads(target.read_text())["programs"]["vibe"], defaults.VIBE_STANDARD)
 
     def test_nothing_is_added_without_vibe(self):
         from cockpit import defaults
         ctx, target = self.setup(installed=False)
-        self.assertIn("nicht installiert", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
+        self.assertIn("not installed", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         self.assertFalse(target.exists())
 
     def test_the_persons_entry_and_a_broken_file_stay(self):
         from cockpit import defaults
         mine = {"programs": {"vibe": {"run": ["my-vibe"]}}}
         ctx, target = self.setup(json.dumps(mine))
-        self.assertIn("bleibt", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
+        self.assertIn("stays", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         self.assertEqual(json.loads(target.read_text()), mine)
         target.write_text("{ kaputt")
-        self.assertIn("übersprungen", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
+        self.assertIn("skipped", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         self.assertEqual(target.read_text(), "{ kaputt")
 
     def test_the_icon_lands_where_the_entry_points(self):
@@ -260,26 +260,26 @@ class ClaudeMenuEntryTest(unittest.TestCase):  # herdr's own "Claude Code" butto
         return defaults.ensure_claude_launcher(ctx.paths, ctx.backup, {"SHELL": shell})
 
     def test_sets_the_run_field_and_keeps_everything_else(self):
-        existing = json.dumps({"programs": {"lazygit": {"name": "Git"}, "claude": {"name": "Mein Claude"}}, "shells": ["x"]})
+        existing = json.dumps({"programs": {"lazygit": {"name": "Git"}, "claude": {"name": "My Claude"}}, "shells": ["x"]})
         ctx, shell, target = self.setup(existing)
         self.apply(ctx, shell)
         data = json.loads(target.read_text())
-        self.assertEqual(data["programs"]["claude"], {"name": "Mein Claude", "run": [shell, "-ic", 'claude "$@"', "claude"]})
+        self.assertEqual(data["programs"]["claude"], {"name": "My Claude", "run": [shell, "-ic", 'claude "$@"', "claude"]})
         self.assertEqual((data["programs"]["lazygit"], data["shells"]), ({"name": "Git"}, ["x"]))
-        self.assertIn("unverändert", self.apply(ctx, shell))  # a second install changes nothing
+        self.assertIn("unchanged", self.apply(ctx, shell))  # a second install changes nothing
 
     def test_never_replaces_a_persons_own_command_or_a_broken_file(self):
         own = json.dumps({"programs": {"claude": {"run": ["my-claude"]}}})
         ctx, shell, target = self.setup(own)
-        self.assertIn("bleibt", self.apply(ctx, shell))
+        self.assertIn("stays", self.apply(ctx, shell))
         self.assertEqual(target.read_text(), own)
         ctx, shell, target = self.setup("{kaputt")
-        self.assertIn("nicht überschrieben", self.apply(ctx, shell))
+        self.assertIn("not overwritten", self.apply(ctx, shell))
         self.assertEqual(target.read_text(), "{kaputt")
 
     def test_other_shells_change_nothing(self):
         ctx, shell, target = self.setup(shell_name="fish")
-        self.assertIn("unverändert", self.apply(ctx, shell))
+        self.assertIn("unchanged", self.apply(ctx, shell))
         self.assertFalse(target.exists())
 
 

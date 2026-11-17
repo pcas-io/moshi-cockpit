@@ -13,11 +13,15 @@ this repository; if the two ever disagree, the code is right and this file is a 
 | Keychain, `ocellio-default` / `default` | Your ocellio token, if you use ocellio. |
 | Keychain, `ocellio-<agent>` / `<agent>` | A copy of it for each agent. |
 | `~/.config/moshi-cockpit/` | `config.json` (server addresses, which server each token is bound to, the registration token's expiry), `agents.json` (your agents), `rules.md` (your own rules). Files holding settings are written owner-only. |
-| `~/.local/state/moshi-cockpit/` | Backups of every file the cockpit changed, so `uninstall` can restore them, and lock files. |
-| `~/.local/share/moshi-cockpit/` | The installed release and the pinned Python runtime. |
+| `~/.local/state/moshi-cockpit/` | `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
+| `~/.local/share/moshi-cockpit/` | The installed release, the pinned Python runtime, and per agent the files its harness needs (a Vibe profile, say). |
+| `~/.gemini/config/mcp_config.json` | Only with an agy agent: its moshi and ocellio tokens, in plain text, mode 0600 (see below). |
 
-No token is ever written to a file, an argument list, a log or an error message. Keychain writes go through
-`security -i` on standard input; tokens reach an agent only through its environment.
+No token is written to an argument list, a log or an error message, and with one exception never to a file.
+Keychain writes go through `security -i` on standard input; tokens reach an agent through its environment.
+The exception is agy: it reads one global configuration file and sends header values as written, without
+expanding variables, so its moshi and ocellio tokens sit in `~/.gemini/config/mcp_config.json`, written
+owner-only (0600). `doctor` reports that file when its mode is wider.
 
 Each token is bound to the server address it was issued for. A token is read from the Keychain only when the
 configured server is that same origin; if the configuration points somewhere else, nothing is sent.
@@ -47,7 +51,9 @@ entries; if moshi cannot be told, the local removal still happens with a warning
 ## Takeover
 
 Starting an agent makes this installation its active one. If another installation holds it, the cockpit asks
-(`run` exits with code 4; the panel shows "Take over here?") and only an explicit yes (`--take-over`) goes on.
+(the panel and `run` in a terminal ask "Take over here?"; without a terminal `run` exits with code 4) and only an
+explicit yes (or `--take-over`) goes on. Nothing is taken over before the start is prepared: an agent whose CLI
+cannot be found stays where it is.
 The limits:
 
 - moshi names installations by label. Two installations with the same label look alike to the cockpit, so it
@@ -82,14 +88,16 @@ yes. The cockpit adds no installer a vendor does not publish.
 
 Because the repository is public, `tools/leak_check.py` blocks internal identifiers, private email addresses,
 issue references and a private list of blocked words. It scans tracked and new files and their paths, the
-author, committer and message of every commit, text that becomes public outside git (pull request bodies,
+author, committer and message of every commit (GitHub's own merge commits keep their pull request number and
+GitHub's address), text that becomes public outside git (pull request bodies,
 release notes, comments) and branch and tag names. The word list is never part of the repository. The
 pre-push hook and `tools/check.sh` run it, and without the list it fails closed.
 
 ## Residual risks
 
 - A process of the same macOS user can read Keychain entries that are not strict (the device key, the agent
-  tokens and the ocellio token) without a prompt. Only the registration token asks every time. The cockpit
+  tokens and the ocellio token) without a prompt. With an agy agent, the same goes for its moshi and ocellio
+  tokens in `~/.gemini/config/mcp_config.json`, which any process of your user can read. Only the registration token asks every time. The cockpit
   does not isolate agents from you: an agent runs as your user.
 - Herdr mods run with full rights in your Herdr window. The cockpit ships its own and `doctor` warns about any
   mod it does not know, but it cannot vouch for mods you add.
@@ -100,5 +108,5 @@ pre-push hook and `tools/check.sh` run it, and without the list it fails closed.
 
 ## Reporting a problem
 
-Please report security issues privately to the repository owner through GitHub's private vulnerability
-reporting for this repository rather than in a public issue.
+Report security issues privately through GitHub's private vulnerability reporting (Security tab → Report a
+vulnerability) — please don't open a public issue.

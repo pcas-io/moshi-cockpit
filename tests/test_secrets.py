@@ -1,6 +1,7 @@
 import os
 import stat
 import unittest
+from pathlib import Path
 
 from cockpit.backup import BackupStore
 import platform
@@ -250,6 +251,57 @@ class BackupStoreTest(unittest.TestCase):
         self.store.restore_all()
         self.assertFalse(link.is_symlink())
         self.assertEqual(link.read_text(), "old launcher")
+
+    def test_a_missing_backup_keeps_the_current_file_and_the_rest_is_restored(self):
+        first, second = self.paths.home / "first.txt", self.paths.home / "second.txt"
+        first.write_text("original 1")
+        second.write_text("original 2")
+        self.store.write_text(first, "changed 1")
+        self.store.write_text(second, "changed 2")
+        Path(self.store.entries()[1]["backup"]).unlink()  # second's backup is gone
+        notes = self.store.restore_all()
+        self.assertEqual(second.read_text(), "changed 2")  # not deleted
+        self.assertEqual(first.read_text(), "original 1")
+        self.assertIn(f"skipped, its backup is missing: {second}", notes)
+        self.assertEqual(self.store.entries(), [])
+
+    def test_restore_keeps_everything_inside_a_kept_folder(self):
+        kept_dir = self.paths.config / "moshi-cockpit"
+        mine, other = kept_dir / "config.json", self.paths.home / "settings.json"
+        self.store.write_text(mine, "{}", mode=0o600)
+        self.store.write_text(other, "x")
+        notes = self.store.restore_all(keep=kept_dir)
+        self.assertTrue(mine.is_file())
+        self.assertFalse(other.exists())
+        self.assertEqual(notes, [f"removed: {other}"])
+        self.assertEqual(self.store.entries(), [])
+
+
+class UninstallTest(unittest.TestCase):
+    """`uninstall` undoes the changes to Herdr and keeps the person's own settings and the Keychain."""
+
+    def test_uninstall_keeps_the_config_folder_and_says_what_stays(self):
+        import io
+        from contextlib import redirect_stdout
+        from cockpit import cli, config
+        paths = temp_paths(self)
+        store = BackupStore(paths.state)
+        config.save_servers(paths, store, {"moshi": "https://moshi.example.test/mcp"})
+        config.save_rules(paths, store, "No customer data.")
+        store.write_text(paths.agents_file, '{"agents": []}\n', mode=0o600)
+        store.write_text(paths.herdr_settings, '{"telemetry": false}\n')
+        out = io.StringIO()
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), redirect_stdout(out):
+            self.assertEqual(cli.main(["uninstall"]), 0)
+        for kept in (paths.mesh_config, paths.rules_file, paths.agents_file):
+            self.assertTrue(kept.is_file(), kept)
+        self.assertFalse(paths.herdr_settings.exists())
+        text = out.getvalue()
+        self.assertIn(f"removed: {paths.herdr_settings}", text)
+        self.assertNotIn("config.json:", text.replace("config.json, ", ""))  # no line restores it
+        self.assertIn("Kept: your settings in ~/.config/moshi-cockpit/ (config.json, agents.json, rules.md)", text)
+        self.assertIn("Keychain", text)
+        self.assertIn("rm -rf ~/.config/moshi-cockpit", text)
 
 
 if __name__ == "__main__":

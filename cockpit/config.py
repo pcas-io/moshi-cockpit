@@ -38,8 +38,20 @@ def validate_url(url: str) -> str:
     if (parts is None or _UNSAFE_CHARS.search(url) or parts.scheme != "https" or not parts.hostname
             or parts.username is not None or parts.password is not None or "@" in parts.netloc
             or parts.query or parts.fragment or "?" in url or "#" in url):
-        raise ValueError(f"Ungültige Server-URL '{url[:80]}' (erlaubt: https://host[:port]/pfad, ohne "
-                         "Zugangsdaten, ? oder #)")
+        raise ValueError(f"Invalid server URL '{url[:80]}' (allowed: https://host[:port]/path, without "
+                         "credentials, ? or #)")
+    return url
+
+
+# Where each server's MCP endpoint lives when an address is given without a path (as in the CLI's help).
+DEFAULT_PATHS = {"moshi": "/mcp", "ocellio": "/mcp/"}
+
+
+def with_default_path(name: str, url: str) -> str:
+    """A valid address, with the server's MCP path added when it has none (`https://host` → `https://host/mcp`)."""
+    url = validate_url(url)
+    if urlsplit(url).path in ("", "/"):
+        return url.rstrip("/") + DEFAULT_PATHS[name]
     return url
 
 
@@ -60,19 +72,19 @@ def read_private(path, what: str) -> str:
     between the check and the read in which the path could be swapped for a link."""
     parent = path.parent.lstat()
     if parent.st_uid != os.getuid() or parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise ValueError(f"{path.parent} ist für andere schreibbar oder gehört nicht dir ({what})")
+        raise ValueError(f"{path.parent} is writable by others or not yours ({what})")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
-        raise ValueError(f"{path} ist keine normale Datei oder nicht lesbar ({what})") from None
+        raise ValueError(f"{path} is not a regular file or not readable ({what})") from None
     with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as handle:
         st = os.fstat(handle.fileno())
         if not stat.S_ISREG(st.st_mode):
-            raise ValueError(f"{path} ist keine normale Datei ({what})")
+            raise ValueError(f"{path} is not a regular file ({what})")
         if st.st_uid != os.getuid():
-            raise ValueError(f"{path} gehört nicht dir ({what})")
+            raise ValueError(f"{path} is not yours ({what})")
         if st.st_mode & 0o077:
-            raise ValueError(f"{path} hat Rechte {oct(st.st_mode & 0o777)}, erwartet 0600 ({what}): chmod 600 {path}")
+            raise ValueError(f"{path} has mode {oct(st.st_mode & 0o777)}, expected 0600 ({what}): chmod 600 {path}")
         return handle.read()
 
 
@@ -92,14 +104,14 @@ class Config:
 def _read(paths: Paths) -> Dict:
     if not paths.mesh_config.exists() and not paths.mesh_config.is_symlink():
         return {}
-    text = read_private(paths.mesh_config, "moshi-cockpit-Config")
+    text = read_private(paths.mesh_config, "moshi-cockpit config")
     try:
         data = json.loads(text)
     except ValueError:
-        raise ValueError(f"{paths.mesh_config} ist nicht lesbar oder kein gültiges JSON; "
-                         "moshi-cockpit install schreibt sie neu") from None
+        raise ValueError(f"{paths.mesh_config} is not readable or not valid JSON; "
+                         "moshi-cockpit install writes it again") from None
     if not isinstance(data, dict):
-        raise ValueError(f"{paths.mesh_config} hat ein unerwartetes Format")
+        raise ValueError(f"{paths.mesh_config} has an unexpected format")
     return data
 
 
@@ -123,14 +135,14 @@ def load_config(paths: Paths) -> Config:
     data = _read(paths)
     raw = data.get("servers") or {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{paths.mesh_config}: 'servers' hat ein unerwartetes Format")
+        raise ValueError(f"{paths.mesh_config}: 'servers' has an unexpected format")
     servers = {}
     for name in SERVERS:
         if raw.get(name):
             servers[name] = validate_url(str(raw[name]))
     unknown = sorted(set(raw) - set(SERVERS))
     if unknown:
-        raise ValueError(f"{paths.mesh_config}: unbekannte Server {unknown}")
+        raise ValueError(f"{paths.mesh_config}: unknown servers {unknown}")
     return Config(servers=servers, rules=load_rules(paths))
 
 
@@ -143,7 +155,7 @@ def save_servers(paths: Paths, backup: BackupStore, servers: Dict[str, Optional[
     current = data.get("servers") if isinstance(data.get("servers"), dict) else {}
     for name, url in servers.items():
         if name not in SERVERS:
-            raise ValueError(f"Unbekannter Server '{name}' (erlaubt: {', '.join(SERVERS)})")
+            raise ValueError(f"Unknown server '{name}' (allowed: {', '.join(SERVERS)})")
         if url:
             current[name] = validate_url(url)
         else:
@@ -156,7 +168,7 @@ def require(config: Config, name: str) -> str:
     """The URL of a server a command needs; a clear message if it is not configured."""
     url = config.server(name)
     if not url:
-        raise ValueError(f"{name} ist nicht eingerichtet: moshi-cockpit install --{name} <https-URL>")
+        raise ValueError(f"{name} is not set up: moshi-cockpit install --{name} <https-URL>")
     return url
 
 
@@ -183,14 +195,14 @@ def load_rules(paths: Paths) -> str:
     writes this file on install, so what is in it stays; it is owner-only like the config (fail-closed)."""
     if not paths.rules_file.exists() and not paths.rules_file.is_symlink():
         return ""
-    text = _clean_rules(read_private(paths.rules_file, "eigene Regeln"))
+    text = _clean_rules(read_private(paths.rules_file, "your own rules"))
     if len(text) > MAX_RULES:
-        raise ValueError(f"{paths.rules_file} ist länger als {MAX_RULES} Zeichen")
+        raise ValueError(f"{paths.rules_file} is longer than {MAX_RULES} characters")
     return text
 
 
 def save_rules(paths: Paths, backup: BackupStore, text: str) -> bool:
     text = _clean_rules(text)
     if len(text) > MAX_RULES:
-        raise ValueError(f"Eigene Regeln: höchstens {MAX_RULES} Zeichen")
+        raise ValueError(f"Your own rules: at most {MAX_RULES} characters")
     return backup.write_text(paths.rules_file, (text + "\n") if text else "", mode=0o600)

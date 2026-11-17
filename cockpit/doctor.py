@@ -216,14 +216,14 @@ def _action(check: Check) -> str:
     if name == "telemetry":
         return f"Herdr's telemetry is not off: {INSTALL}"
     if name == "permissions":
-        if "schreibbar" in detail:  # defaults.permission_findings
+        if "writable by" in detail:  # defaults.permission_findings
             return f"Take the write permission away from others with chmod go-w: {detail}"
         return f"Check this path: {detail}"
     if name == "config":
         return f"Fix your configuration: {detail}"
     if name.startswith("endpoint-"):
         server = name[len("endpoint-"):]
-        if "nicht erreichbar" in detail:  # mcp.probe_unauthenticated
+        if "not reachable" in detail:  # mcp.probe_unauthenticated
             return f"{server} is not reachable: Check your internet connection"
         return f"{server} answers unexpectedly: Check the server address ({detail})"
     if name.startswith("agent-"):
@@ -239,9 +239,9 @@ def _agent_action(agent: str, detail: str) -> str:
         return f"Agent {agent} is bound to another server than the configured one: {detail}"
     if "not installed" in detail:
         return f"Agent {agent}: {detail}. Install the CLI"
-    if "nicht 0600" in detail:
+    if "not 0600" in detail:
         return f"Agent {agent}: {detail}. Reset the file with chmod 600"
-    if "fehlt (moshi-cockpit install)" in detail or "weicht von dem ab" in detail:
+    if "is missing (moshi-cockpit install)" in detail or "differs from what moshi-cockpit writes" in detail:
         return f"The setup of agent {agent} differs: {INSTALL}"
     return f"Agent {agent}: {detail}"
 

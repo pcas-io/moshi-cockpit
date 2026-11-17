@@ -32,6 +32,18 @@ ask() {
   printf '%s' "$answer"
 }
 
+current() {  # PYTHON SERVER: the address the settings hold now, printable characters only; empty on any doubt
+  "$1" -I -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle)["servers"][sys.argv[2]]
+except Exception:
+    value = ""
+print("".join(ch for ch in str(value) if 32 < ord(ch) < 127)[:200])
+' "$HOME/.config/moshi-cockpit/config.json" "$2" </dev/null 2>/dev/null || true
+}
+
 download() {  # URL FILE WHAT
   curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" --tlsv1.2 -fsSL --retry 2 -o "$2" "$1" \
     || fail "download failed ($3). Nothing was installed. Check the connection and run the line again"
@@ -106,9 +118,25 @@ main() {
   mv "$tmp/app/moshi-cockpit-$VERSION" "$target"
 
   # An empty answer leaves the setting as it is; an explicit empty flag removes it (as with moshi-cockpit install).
+  # On an update the prompt shows the address set now.
   if has_tty; then
-    [ -n "$moshi_set" ] || moshi=$(ask "moshi address (leave empty to use Herdr without moshi):")
-    [ -n "$ocellio_set" ] || ocellio=$(ask "ocellio address (leave empty to skip):")
+    python="$runtime/python/bin/python3"
+    if [ -z "$moshi_set" ]; then
+      now=$(current "$python" moshi)
+      if [ -n "$now" ]; then
+        moshi=$(ask "moshi address [current: $now] (leave empty to keep it):")
+      else
+        moshi=$(ask "moshi address (leave empty to use Herdr without moshi):")
+      fi
+    fi
+    if [ -z "$ocellio_set" ]; then
+      now=$(current "$python" ocellio)
+      if [ -n "$now" ]; then
+        ocellio=$(ask "ocellio address [current: $now] (leave empty to keep it):")
+      else
+        ocellio=$(ask "ocellio address (leave empty to skip):")
+      fi
+    fi
   fi
   set --
   if [ -n "$moshi_set" ] || [ -n "$moshi" ]; then set -- "$@" --moshi "$moshi"; fi

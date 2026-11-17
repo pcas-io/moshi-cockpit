@@ -38,7 +38,7 @@ def permission_findings(paths: Paths, uid: Optional[int] = None) -> List[str]:
     findings = []
     for path in (paths.config, paths.herdr_app_home, paths.herdr_socket):
         if writable_by_others(path):
-            findings.append(f"{path} ist für Gruppe/andere schreibbar")
+            findings.append(f"{path} is writable by group or others")
     findings.extend(socket_findings(paths.herdr_socket, os.getuid() if uid is None else uid))
     return findings
 
@@ -57,14 +57,14 @@ def socket_findings(sock: Path, uid: int) -> List[str]:
         return []
     findings = []
     if not stat.S_ISSOCK(st.st_mode):
-        findings.append(f"{sock} ist kein Socket (Typ prüfen, nicht von herdr angelegt?)")
+        findings.append(f"{sock} is not a socket (check what it is; Herdr did not create it?)")
     if st.st_uid != uid:
-        findings.append(f"{sock} gehört nicht dir (uid {st.st_uid})")
+        findings.append(f"{sock} is not yours (uid {st.st_uid})")
     parent = sock.parent.lstat()
     if parent.st_uid != uid:
-        findings.append(f"{sock.parent} gehört nicht dir (uid {parent.st_uid})")
+        findings.append(f"{sock.parent} is not yours (uid {parent.st_uid})")
     if parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        findings.append(f"{sock.parent} ist für Gruppe/andere schreibbar (Socket austauschbar)")
+        findings.append(f"{sock.parent} is writable by group or others (the socket could be swapped)")
     return findings
 
 
@@ -82,13 +82,13 @@ def unknown_mods(paths: Paths) -> List[str]:
     return sorted(p.name for p in paths.herdr_mods.iterdir() if p.is_dir() and p.name not in known)
 
 
-RERUN_HINT = "Herdr einmal öffnen, dann moshi-cockpit install erneut"
+RERUN_HINT = "Open Herdr once, then run moshi-cockpit install again"
 
 def cockpit_findings(paths: Paths) -> List[str]:
     """What `install` could not set up yet (typically: Herdr was never started before it ran)."""
     findings = []
     if not (paths.herdr_app_home / "layouts" / f"{COCKPIT_LAYOUT}.json").is_file():
-        findings.append("Layout cockpit fehlt")
+        findings.append("The cockpit layout is missing")
     return findings
 
 
@@ -114,7 +114,7 @@ def remove_panel_key(paths: Paths, backup: BackupStore) -> Optional[str]:
     if not changed:
         return None
     backup.write_text(keys_file, json.dumps(keys, indent=2) + "\n")
-    return "⌘⇧M: alte Belegung für das moshi-Panel entfernt"
+    return "⌘⇧M: removed the old binding of the moshi panel"
 
 
 # Left out of the cockpit layout to keep it lean: herdr's files/changes side panel.
@@ -171,18 +171,18 @@ def menu_findings(paths: Paths) -> List[str]:
     shipped = load_json(paths.herdr_app_home / "installed.json").get("new-menu")
     version = shipped.get("main.js") if isinstance(shipped, dict) else None
     if version and version != NEW_MENU_UPSTREAM:
-        findings.append("Herdrs „+“-Menü hat sich geändert, unsere Kopie (mesh-new-menu) kennt das noch nicht")
+        findings.append("Herdr's \"+\" menu has changed; our copy (mesh-new-menu) does not know that change yet")
     try:
         tabs = (paths.herdr_mods / "tabs" / "main.js").read_text()
     except OSError:
         if main_layout_ready(paths):  # before herdr's first start there is nothing to miss yet
-            findings.append("Herdrs Tab-Leiste fehlt: das Layout cockpit nutzt Herdrs eigenes Menü")
+            findings.append("Herdr's tab bar is missing: the cockpit layout uses Herdr's own menu")
         return findings
     ours = paths.herdr_mods / "mesh-tabs" / "main.js"
     if tabs.count(TABS_OPENS_MENU) != 1:
-        findings.append("Herdrs Tab-Leiste öffnet das „+“-Menü anders: das Layout cockpit nutzt Herdrs eigenes Menü")
+        findings.append("Herdr's tab bar opens the \"+\" menu in a new way: the cockpit layout uses Herdr's own menu")
     elif not ours.is_file() or ours.read_text() != tabs.replace(TABS_OPENS_MENU, TABS_OPENS_OURS):
-        findings.append("Herdrs Tab-Leiste hat sich geändert: moshi-cockpit install aktualisiert unsere Kopie (mesh-tabs)")
+        findings.append("Herdr's tab bar has changed: moshi-cockpit install updates our copy (mesh-tabs)")
     return findings
 
 
@@ -206,15 +206,15 @@ def main_layout_ready(paths: Paths) -> bool:
 
 def install_cockpit_layout(paths: Paths, backup: BackupStore) -> str:
     if not main_layout_ready(paths):
-        return "Layout cockpit: übersprungen, Herdr lief hier noch nie. " + RERUN_HINT
+        return "Cockpit layout: skipped, Herdr has never run here. " + RERUN_HINT
     main = load_json(paths.herdr_app_home / "layouts" / "main.json")
     target = paths.herdr_app_home / "layouts" / f"{COCKPIT_LAYOUT}.json"
     own_menu = install_menu_tabs(paths, backup)
     layout = cockpit_layout(main, own_menu)
     changed = backup.write_text(target, json.dumps(layout, indent=2) + "\n")
-    note = "Layout cockpit (Your agents in der Sidebar): " + ("angelegt/aktualisiert" if changed else "unverändert")
+    note = "Cockpit layout (Your agents in the sidebar): " + ("created or updated" if changed else "unchanged")
     if OWN_AGENTS_BLOCK["id"] not in json.dumps(layout):
-        note += "; Your agents fehlt, Herdrs Sidebar hat keine Agents-Liste mehr"
+        note += "; Your agents is missing, Herdr's sidebar has no Agents list any more"
     return note
 
 
@@ -245,9 +245,9 @@ def ensure_claude_launcher(paths: Paths, backup: BackupStore, environ: Mapping[s
     target = paths.herdr_app_home / "programs.json"
     shell = interactive_shell(environ)
     if not shell:
-        return "herdr-Menü claude: unverändert (keine zsh/bash als Shell)"
+        return "Herdr menu, claude: unchanged (your shell is not zsh or bash)"
     if target.exists() and not load_json(target):
-        return "herdr-Menü claude: übersprungen, programs.json ist leer oder kein gültiges JSON (nicht überschrieben)"
+        return "Herdr menu, claude: skipped, programs.json is empty or not valid JSON (not overwritten)"
     data = load_json(target)
     programs = data.setdefault("programs", {})
     if not isinstance(programs, dict):
@@ -255,10 +255,10 @@ def ensure_claude_launcher(paths: Paths, backup: BackupStore, environ: Mapping[s
     entry = programs.setdefault("claude", {})
     ours = [shell, "-ic", 'claude "$@"', "claude"]  # arguments reach claude: the session list resumes with them
     if not isinstance(entry, dict) or ("run" in entry and entry["run"] not in (ours, [shell, "-ic", "claude"])):
-        return "herdr-Menü claude: eigener Startbefehl in programs.json bleibt"
+        return "Herdr menu, claude: your own start command in programs.json stays"
     entry["run"] = ours
     changed = backup.write_text(target, json.dumps(data, indent=2) + "\n")
-    return "herdr-Menü claude: startet über deine Shell" + ("" if changed else ", unverändert")
+    return "Herdr menu, claude: starts through your shell" + ("" if changed else ", unchanged")
 
 
 ICON_DIR = "mesh-icons"
@@ -279,28 +279,28 @@ def ensure_vibe_entry(paths: Paths, backup: BackupStore) -> str:
     from cockpit.harnesses import HARNESSES
     target = paths.herdr_app_home / "programs.json"
     if target.exists() and not load_json(target):
-        return "herdr-Menü Vibe: übersprungen, programs.json ist leer oder kein gültiges JSON (nicht überschrieben)"
+        return "Herdr menu, Vibe: skipped, programs.json is empty or not valid JSON (not overwritten)"
     data = load_json(target)
     programs = data.setdefault("programs", {})
     if not isinstance(programs, dict):
         return PROGRAMS_BROKEN
     current = programs.get("vibe")
     if current == VIBE_STANDARD:
-        return "herdr-Menü Vibe: unverändert"
+        return "Herdr menu, Vibe: unchanged"
     ours = isinstance(current, dict) and current.get("icon") == VIBE_ICON  # written by an earlier install
     if current is not None and not ours:
-        return "herdr-Menü Vibe: eigener Eintrag in programs.json bleibt"
+        return "Herdr menu, Vibe: your own entry in programs.json stays"
     if current is None and not HARNESSES["vibe"].installed(paths):
-        return "herdr-Menü Vibe: übersprungen, vibe ist hier nicht installiert"
+        return "Herdr menu, Vibe: skipped, vibe is not installed here"
     programs["vibe"] = dict(VIBE_STANDARD)
     backup.write_text(target, json.dumps(data, indent=2) + "\n")
-    return "herdr-Menü Vibe: unter „Start a standard agent“ ergänzt"
+    return "Herdr menu, Vibe: added under \"Start a standard agent\""
 
 
 # herdr's own icons for the harnesses that have one, ours for Vibe (herdr ships none).
 MENU_ICONS = {"claude": "icons/claude.svg", "codex": "icons/codex.svg", "grok": "icons/grok.svg",
               "agy": "icons/antigravity.svg", "vibe": VIBE_ICON}
-PROGRAMS_BROKEN = "herdr-Menü: übersprungen, programs.json hat ein unerwartetes Format (nicht überschrieben)"
+PROGRAMS_BROKEN = "Herdr menu: skipped, programs.json has an unexpected format (not overwritten)"
 MENU_PREFIX = "moshi-cockpit-"  # our entries in programs.json: only these are ever removed
 
 
@@ -313,12 +313,12 @@ def sync_agent_menu(paths: Paths, backup: BackupStore) -> str:
     target = paths.herdr_app_home / "programs.json"
     data = load_json(target)
     if target.exists() and not data:
-        return "herdr-Menü Agents: übersprungen, programs.json ist leer oder kein gültiges JSON (nicht überschrieben)"
+        return "Herdr menu, agents: skipped, programs.json is empty or not valid JSON (not overwritten)"
     config = load_config(paths)
     wanted = {}
     for agent in load_agents(paths, enforce=False):
         harness = HARNESSES[agent.harness]
-        label = agent.name + (" (kein eigenes moshi)" if config.has("moshi") and "moshi" not in harness.mesh_servers else "")
+        label = agent.name + (" (no moshi identity of its own)" if config.has("moshi") and "moshi" not in harness.mesh_servers else "")
         entry = {"name": label, "run": [str(paths.local_bin / "moshi-cockpit"), "run", agent.name]}
         if agent.harness in MENU_ICONS:
             entry["icon"] = MENU_ICONS[agent.harness]
@@ -332,7 +332,7 @@ def sync_agent_menu(paths: Paths, backup: BackupStore) -> str:
         del programs[key]
     programs.update(wanted)
     changed = backup.write_text(target, json.dumps(data, indent=2) + "\n")
-    return f"herdr-Menü Agents: {len(wanted)} Einträge" + ("" if changed else ", unverändert")
+    return f"Herdr menu, agents: {len(wanted)} entries" + ("" if changed else ", unchanged")
 
 
 def load_json(path: Path) -> Dict:

@@ -18,7 +18,7 @@ test("names follow moshi's rule and the reserved list", () => {
 });
 
 test("roles lose control characters and are bounded like registry._validate", () => {
-  assert.equal(roleText("  Recherche \u001b[31m und\tSuche\n "), "Recherche [31m und Suche");
+  assert.equal(roleText("  Research \u001b[31m and\tsearch\n "), "Research [31m and search");
   assert.equal(roleText("\u0000"), "");
   assert.equal(roleText("x".repeat(200)).length, 64);
   // UTF-16 units, like moshi's `.length`: an emoji counts 2 and is never cut in half
@@ -65,6 +65,6 @@ test("own agents only, presence only with an own moshi identity", () => {
 test("a running agent is found by its tab, never by its CLI alone", () => {
   const t = (tab_name, address, seq, terminal = "x") => ({ tab_name, address, seq, terminal });
   assert.equal(runningTerminal("marv", [t("marv", "a", 1), t("marv", "b", 2)]), "b");
-  assert.equal(runningTerminal("grok", [t("grok (kein eigenes moshi)", "a", 1)]), "a");
+  assert.equal(runningTerminal("grok", [t("grok (no moshi identity of its own)", "a", 1)]), "a");
   assert.equal(runningTerminal("codex", [t("Codex", "a", 1), t("codex2", "b", 1), t("codex", "c", 1, null)]), null);
 });

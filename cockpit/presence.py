@@ -12,29 +12,29 @@ from cockpit.policy import IRREVERSIBLE
 
 
 def presence_text(moshi_name: str, config: Config, role: Optional[str] = None, skill: str = "") -> str:
-    lines = [f"# Arbeitsregeln (Agent `{moshi_name}`)", ""]
+    lines = [f"# Working rules (agent `{moshi_name}`)", ""]
     if role:
-        lines.append(f"Rolle: {role}")
+        lines.append(f"Role: {role}")
     if config.has("moshi"):
         lines += [
-            f"moshi: Deine Identität ist `{moshi_name}`. Zu Sitzungsbeginn `mesh_register` mit Rolle und konkretem "
-            "nächsten Ergebnis (`working_on`), danach `mesh_inbox`; nur bei `inbox_pending` > 0 `mesh_receive`.",
-            "Vor größeren Aufgaben `working_on` aktualisieren, bei Abschluss oder Blockade `idle`. "
-            "Bei Send/Reply immer `context` mitgeben.",
+            f"moshi: your identity is `{moshi_name}`. At the start of a session, `mesh_register` with your role and "
+            "your concrete next result (`working_on`), then `mesh_inbox`; `mesh_receive` only when `inbox_pending` > 0.",
+            "Update `working_on` before larger tasks, set `idle` when you finish or are blocked. "
+            "Always give `context` with a send or reply.",
         ]
     if config.has("ocellio"):
-        lines.append("ocellio: Zu Sitzungsbeginn `context_load`. Lesen und Berichte (`save_entity`) ohne Nachfrage; "
-                     "alles, was Bestehendes ändert, verknüpft, archiviert oder Admin-Funktionen nutzt, fragt nach.")
+        lines.append("ocellio: `context_load` at the start of a session. Read and save reports (`save_entity`) without "
+                     "asking; ask before anything that changes, links or archives what exists, or uses admin functions.")
         if skill:
-            lines.append(f"Skill: Lade zu Sitzungsbeginn den ocellio-Skill `{skill}` mit `load_skill` und arbeite danach. "
-                         "Lässt er sich nicht laden, sag das in deiner ersten Antwort und arbeite ohne ihn weiter.")
+            lines.append(f"Skill: at the start of a session, load the ocellio skill `{skill}` with `load_skill` and work "
+                         "by it. If it cannot be loaded, say so in your first answer and carry on without it.")
     lines += [
-        "Vor jedem irreversiblen Tool (" + ", ".join(f"`{t}`" for t in IRREVERSIBLE) + ") schreibst du zuerst "
-        "eine Zeile `IRREVERSIBEL: <tool> → <Ziel>` und wartest auf die Freigabe.",
-        "Freigaben nie umgehen: keine Auto-Approve- oder Skip-Optionen, keine Freigabe in fremdem Namen, keine "
-        "fremden Identitäten. Lehnt die Person ab oder fehlt eine Oberfläche, gilt das als Nein.",
+        "Before every irreversible tool (" + ", ".join(f"`{t}`" for t in IRREVERSIBLE) + "), first write "
+        "one line `IRREVERSIBLE: <tool> → <target>` and wait for the approval.",
+        "Never get around approvals: no auto-approve or skip options, no approval in someone else's name, no "
+        "identities of others. If the person says no, or there is no screen to ask on, that counts as no.",
     ]
     if config.rules:
         # The person's own rules (rules.md): they come last and bind like the rest.
-        lines += ["", "## Eigene Regeln (verbindlich)", "", config.rules]
+        lines += ["", "## Your own rules (binding)", "", config.rules]
     return "\n".join(lines) + "\n"

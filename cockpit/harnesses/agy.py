@@ -71,13 +71,13 @@ class Agy(Harness):
         config = ctx.paths.agy_mcp_config
         if not config.is_file():
             # The settings check stands on its own: an inherited grant matters even before setup.
-            return [f"{config} fehlt (moshi-cockpit install)"] + agy_findings(ctx.paths)
+            return [f"{config} is missing (moshi-cockpit install)"] + agy_findings(ctx.paths)
         findings = []
         if config.stat().st_mode & 0o077:
-            findings.append(f"{config} ist nicht 0600 (enthält Tokens)")
+            findings.append(f"{config} is not 0600 (it holds tokens)")
         servers = {s: ctx.config.servers[s] for s in self.servers(ctx)}
         expected = redacted(agy_mcp_config(servers, {s: "x" for s in servers}))
         if redacted(load_json(config)) != expected:
-            findings.append(f"agy: {config} weicht von dem ab, was moshi-cockpit schreibt (Server, URLs, Tools); "
-                            "moshi-cockpit install stellt sie wieder her")
+            findings.append(f"agy: {config} differs from what moshi-cockpit writes (servers, URLs, tools); "
+                            "moshi-cockpit install restores it")
         return findings + agy_findings(ctx.paths)

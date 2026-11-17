@@ -1,5 +1,5 @@
 """Hostile or broken servers: redirects, garbage, cut-off and oversized bodies, deep JSON, echoed tokens.
-Every one must end as MoshiError / McpError, never as a stray exception, and never carry the token."""
+Every one must end as MoshiError, never as a stray exception, and never carry the token."""
 
 import json
 import socket
@@ -7,7 +7,6 @@ import threading
 import unittest
 
 from cockpit.http import MAX_BODY
-from cockpit.mcp import McpClient, McpError
 from cockpit.moshi_api import MoshiApi, MoshiError
 from tests.fake_moshi import serve
 
@@ -137,26 +136,6 @@ class MoshiApiHostileTest(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "http_error")
 
 
-class McpClientHostileTest(unittest.TestCase):
-    def test_every_broken_answer_is_an_mcp_error(self):
-        cases = {name: answer for name, (answer, _, _) in CASES.items() if name != "missing fields"}
-        cases["SSE event with deep JSON"] = http_answer("HTTP/1.1 200 OK", b"data: " + DEEP + b"\n\n",
-                                                        content_type="text/event-stream")
-        cases["result is no object"] = http_answer("HTTP/1.1 200 OK", b'{"jsonrpc": "2.0", "id": 1, "result": [1]}')
-        for name, answer in cases.items():
-            with self.subTest(case=name):
-                with self.assertRaises(McpError) as ctx:
-                    McpClient(raw_server(self, answer), "bt_MCPHOSTILESECRET", timeout=3).call_tool("mesh_status")
-                self.assertNotIn("MCPHOSTILESECRET", str(ctx.exception))
-
-    def test_a_deep_tool_result_is_an_mcp_error(self):
-        text = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": DEEP.decode()}]}})
-        # initialize and tools/call both get this answer; the tool's own text is what nests too deep
-        url = raw_server(self, http_answer("HTTP/1.1 200 OK", text.encode()))
-        with self.assertRaises(McpError):
-            McpClient(url, "bt_x", timeout=3).call_tool("mesh_status")
-
-
 class RedirectTest(unittest.TestCase):
     """A 3xx is refused, never followed: urllib would forward the Authorization header to any origin
     (it follows a 302 even for a POST, turning it into a GET with the same headers)."""
@@ -189,17 +168,6 @@ class RedirectTest(unittest.TestCase):
                     with self.assertRaises(MoshiError) as ctx:
                         call(*args)
                     self.assertEqual((ctx.exception.reason, ctx.exception.status), ("redirect", status))
-        self.assertEqual(self.other.requests, [])
-
-    def test_mcp_client_refuses_a_cross_origin_redirect(self):
-        for status in (302, 307):
-            self.moshi.redirect_status = status
-            with self.subTest(status=status):
-                with self.assertRaises(McpError) as ctx:
-                    McpClient(self.moshi.url, "bt_MCPREDIRECTSECRET").call_tool("mesh_status")
-                self.assertIn("redirect", str(ctx.exception))
-                self.assertIn(str(status), str(ctx.exception))
-                self.assertNotIn("MCPREDIRECTSECRET", str(ctx.exception))
         self.assertEqual(self.other.requests, [])
 
 

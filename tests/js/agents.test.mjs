@@ -19,13 +19,20 @@ test("harness map marks missing harnesses with an install action", () => {
                             offer("grok", true, false, "connects through your account")], known, CLI);
   const by = Object.fromEntries(rows.map((r) => [r.name, r]));
   assert.deepEqual(rows.map((r) => r.name), ["claude", "codex", "vibe", "agy", "grok"]);  // ours only, no "pi"
-  // herdr finds it (a login shell function, say): installed, so no install action
-  assert.equal(by.claude.installed, true);
-  assert.equal(by.claude.install, null);
+  // herdr finds it (a login shell function, say), the CLI does not: `run` could not start it, so not selectable
+  assert.equal(by.claude.installed, false);
+  assert.equal(by.claude.selectable, false);
+  assert.equal(by.claude.herdrOnly, true);
+  assert.equal(by.claude.note, "found by Herdr, not on moshi-cockpit's PATH");
+  assert.deepEqual(by.claude.install, { name: "Install Claude Code", argv: [CLI, "harness", "install", "claude"] });
+  // the CLI finds it: selectable whatever herdr says
   assert.equal(by.vibe.selectable, true);
+  assert.equal(by.vibe.note, "");
   // missing everywhere: greyed, with the official installer in a terminal tab
   assert.equal(by.agy.installed, false);
   assert.equal(by.agy.selectable, false);
+  assert.equal(by.agy.herdrOnly, false);
+  assert.equal(by.agy.note, "not installed");
   assert.deepEqual(by.agy.install, { name: "Install Antigravity", argv: [CLI, "harness", "install", "agy"] });
   // installed but refused by the CLI: greyed with its reason, nothing to install
   assert.equal(by.grok.selectable, false);

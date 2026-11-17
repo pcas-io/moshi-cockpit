@@ -44,10 +44,14 @@ class BackupStore:
         link.symlink_to(target)
         return True
 
-    def restore_all(self) -> List[str]:
-        """Reverts every recorded change, newest first. Returns human-readable notes."""
+    def restore_all(self, keep: Optional[Path] = None) -> List[str]:
+        """Reverts every recorded change, newest first, except those inside `keep` (they stay as they are and
+        leave the list). Returns human-readable notes."""
         notes: List[str] = []
         for entry in reversed(self._load()):
+            path = Path(str(entry["path"]))
+            if keep is not None and (path == keep or keep in path.parents):
+                continue
             notes.append(self._restore(entry))
         self._save([])
         return notes
@@ -73,15 +77,17 @@ class BackupStore:
     def _restore(self, entry: Dict[str, Optional[str]]) -> str:
         path = Path(str(entry["path"]))
         backup = entry["backup"]
+        if backup is not None and not backup.startswith("symlink:") and not Path(backup).is_file():
+            return f"skipped, its backup is missing: {path}"  # never delete a file that cannot be put back
         if path.is_symlink() or path.exists():
             path.unlink()
         if backup is None:
-            return f"entfernt: {path}"
+            return f"removed: {path}"
         if backup.startswith("symlink:"):
             path.symlink_to(backup[len("symlink:"):])
-            return f"Symlink wiederhergestellt: {path}"
+            return f"symlink restored: {path}"
         shutil.move(backup, path)
-        return f"wiederhergestellt: {path}"
+        return f"restored: {path}"
 
     def _load(self) -> List[Dict[str, Optional[str]]]:
         if not self._manifest.is_file():

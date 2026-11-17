@@ -1,56 +1,26 @@
-"""The minimal MCP client: SSE and JSON answers, refused tokens, error text, the unauthenticated probe."""
+"""The unauthenticated probe doctor uses: a healthy endpoint answers 401 with a Bearer challenge."""
 
-import io
-import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from cockpit.mcp import McpClient, McpError, parse_body, probe_unauthenticated
-
-TOKEN = "bt_TESTTOKEN_abcdefgh"
+from cockpit.mcp import McpError, probe_unauthenticated
 
 
 class FakeMcp(BaseHTTPRequestHandler):
-    """Answers like moshi: initialize as SSE with a session id, tools/call as JSON."""
-
-    seen_auth = []
+    """Answers every request without a token like moshi does: 401 with a Bearer challenge."""
 
     def do_POST(self):  # noqa: N802 (http.server API)
-        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        FakeMcp.seen_auth.append(self.headers.get("Authorization"))
-        if self.headers.get("Authorization") != f"Bearer {TOKEN}":
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Bearer resource_metadata="x"')
-            self.end_headers()
-            return
-        if "id" not in body:
-            self.send_response(202)
-            self.end_headers()
-            return
-        if body["method"] == "initialize":
-            payload = {"jsonrpc": "2.0", "id": body["id"], "result": {"protocolVersion": "2025-06-18"}}
-            self._send("text/event-stream", f"event: message\ndata: {json.dumps(payload)}\n\n", session="s1")
-            return
-        agents = {"agents": [{"name": "vibe", "presence": "live", "role": "skill-a", "working_on": "idle",
-                              "last_seen_at": "2026-11-07T09:00:00Z"},
-                             {"name": "Grok", "presence": "stale", "working_on": "delivering: x to y"}]}
-        result = {"content": [{"type": "text", "text": json.dumps(agents)}], "isError": False}
-        self._send("application/json", json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}))
-
-    def _send(self, content_type, text, session=None):
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        if session:
-            self.send_header("Mcp-Session-Id", session)
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Bearer resource_metadata="x"')
         self.end_headers()
-        self.wfile.write(text.encode())
 
     def log_message(self, *args):
         pass
 
 
-class McpTest(unittest.TestCase):
+class ProbeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = HTTPServer(("127.0.0.1", 0), FakeMcp)
@@ -62,56 +32,19 @@ class McpTest(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
 
-    def test_call_tool_handles_sse_init_and_json_result(self):
-        result = McpClient(self.url, TOKEN).call_tool("mesh_status")
-        self.assertEqual(result["agents"][0]["name"], "vibe")
-
-    def test_wrong_token_raises_without_leaking_it(self):
-        with self.assertRaises(McpError) as ctx:
-            McpClient(self.url, "bt_WRONGTOKEN_123456").call_tool("mesh_status")
-        self.assertNotIn("WRONGTOKEN", str(ctx.exception))
-
     def test_probe_unauthenticated_sees_bearer_challenge(self):
         code, challenge = probe_unauthenticated(self.url)
         self.assertEqual(code, 401)
         self.assertTrue(challenge.startswith("Bearer"))
 
-
-class ErrorSanitizingTest(unittest.TestCase):
-    def test_server_error_text_is_cleaned_before_it_reaches_the_terminal(self):
-        class Response:
-            status = 200
-            headers = {"Content-Type": "application/json", "Mcp-Session-Id": "s"}
-
-            def __init__(self, payload):
-                self._body = io.BytesIO(json.dumps(payload).encode())
-
-            def read(self, amt=-1):
-                return self._body.read(amt)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        replies = iter([{"jsonrpc": "2.0", "id": 1, "result": {}}, {},
-                        {"jsonrpc": "2.0", "id": 2, "error": {"message": "boom\x1b]0;owned\x07\r\nfake"}}])
-        client = McpClient("http://x/mcp", TOKEN, opener=lambda *a, **k: Response(next(replies)))
+    def test_an_unreachable_endpoint_is_an_mcp_error(self):
+        import socket
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
         with self.assertRaises(McpError) as ctx:
-            client.call_tool("mesh_status")
-        self.assertNotIn("\x1b", str(ctx.exception))
-        self.assertNotIn("\r", str(ctx.exception))
-
-
-class ParseBodyTest(unittest.TestCase):
-    def test_last_sse_event_wins(self):
-        body = 'data: {"a": 1}\n\ndata: {"a": 2}\n\n'
-        self.assertEqual(parse_body("text/event-stream", body), {"a": 2})
-
-    def test_invalid_json_raises(self):
-        with self.assertRaises(McpError):
-            parse_body("application/json", "<html>")
+            probe_unauthenticated(f"http://127.0.0.1:{port}/mcp")
+        self.assertIn("is not reachable", str(ctx.exception))
 
 
 if __name__ == "__main__":

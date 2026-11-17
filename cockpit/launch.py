@@ -6,7 +6,8 @@ into the environment only, never argv. For harnesses that ask for it the environ
 process is replaced (execve), so herdr sees the agent CLI itself.
 
 Before the start, `claim` makes this installation the agent's active one in moshi: moshi's MCP endpoint
-refuses an agent token whose installation is not the active one, a freshly loaded agent included.
+refuses an agent token whose installation is not the active one, a freshly loaded agent included. `prepare`
+runs first (command, tokens, binary), so a start that cannot happen never takes an agent over.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from cockpit import agents_remote, status
@@ -30,8 +32,6 @@ Exec = Callable[[str, List[str], dict], None]
 SHELLS = ("zsh", "bash")
 RUN_MARKER = "MOSHI_COCKPIT_RUN"
 UNREACHABLE = "moshi is not reachable; starting without the mesh."
-DEAD_TOKEN = ("moshi no longer accepts the token of {name} on this Mac. Run moshi-cockpit agent remove {name}, "
-              "then moshi-cockpit agent load {name}.")
 
 
 class ActiveElsewhere(RuntimeError):
@@ -47,10 +47,11 @@ def _warn(text: str) -> None:
 
 
 def claim(paths: Paths, keychain: SecretStore, name: str, take_over: bool = False,
-          api: Optional[MoshiApi] = None, warn: Callable[[str], None] = _warn) -> None:
+          api: Optional[MoshiApi] = None, warn: Callable[[str], None] = _warn,
+          confirm: Optional[Callable[[str], bool]] = None) -> None:
     """Makes this installation the agent's active one, silently when nobody or this one holds it. Another
-    installation holds it: ActiveElsewhere, unless `take_over`. Nothing to do without moshi, without the
-    agent's moshi token, or for an older token bound to no installation. moshi unreachable: one warning,
+    installation holds it: ActiveElsewhere, unless `take_over` or `confirm(label)` says yes. Nothing to do
+    without moshi, without the agent's moshi token, or for an older token bound to no installation. moshi unreachable: one warning,
     the agent starts anyway. Without a usable device key ApprovalRequired; a token moshi refuses: ValueError,
     so no harness starts only to be refused."""
     agent = find(paths, name)
@@ -64,13 +65,14 @@ def claim(paths: Paths, keychain: SecretStore, name: str, take_over: bool = Fals
     try:
         holder = status.where(paths, config, keychain, agent.name, api)
         if holder["active"] and not holder["here"] and not take_over:
-            raise ActiveElsewhere(holder["active"])
+            if not (confirm and confirm(holder["active"])):
+                raise ActiveElsewhere(holder["active"])
         api.activate(moshi_token(paths, keychain, agent.name, url))
     except MoshiError as exc:
         if status.unreachable(exc):
             warn(UNREACHABLE)
         elif exc.reason != "legacy_token":
-            raise (ValueError(DEAD_TOKEN.format(name=agent.name)) if exc.status == 401
+            raise (ValueError(agents_remote.DEAD_TOKEN.format(name=agent.name)) if exc.status == 401
                    else agents_remote.refusal(exc, agent.name)) from None
 
 
@@ -102,18 +104,39 @@ def _on_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def run_agent(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str],
-              execve: Exec = os.execve, environ: Mapping[str, str] = os.environ,
-              on_terminal: Callable[[], bool] = _on_terminal) -> None:
+@dataclass(frozen=True)
+class Start:
+    """What `execute` replaces this process with: the program, its argv and its environment."""
+    path: str
+    argv: List[str]
+    env: Dict[str, str]
+
+
+NOT_FOUND = "{binary} is not found on your PATH"
+
+
+def prepare(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str],
+            environ: Mapping[str, str] = os.environ, on_terminal: Callable[[], bool] = _on_terminal) -> Start:
+    """Everything a start needs, tokens and the binary included, before anything changes in moshi: a start
+    that cannot happen never takes an agent over."""
     harness, argv, extra_env = command(paths, keychain, name, extra)
     binary = shutil.which(harness.binary)
     if not binary:
-        raise ValueError(f"{harness.binary} nicht gefunden (PATH)")
+        raise ValueError(NOT_FOUND.format(binary=harness.binary))
     env = agent_env(environ, extra_env, harness.clean_env)
     shell = interactive_shell(environ) if harness.shell_start and on_terminal() else None
     if shell:
         # Arguments stay positional ("$@"): nothing a person typed is ever parsed by the shell. The marker
         # tells a wrapper that these arguments are ours, so it may still ask what it asks at a plain start.
-        execve(shell, [shell, "-ic", f'{harness.binary} "$@"', harness.binary, *argv[1:]], {**env, RUN_MARKER: "1"})
-    else:
-        execve(binary, argv, env)
+        return Start(shell, [shell, "-ic", f'{harness.binary} "$@"', harness.binary, *argv[1:]], {**env, RUN_MARKER: "1"})
+    return Start(binary, list(argv), env)
+
+
+def execute(start: Start, execve: Optional[Exec] = None) -> None:
+    (execve or os.execve)(start.path, start.argv, start.env)
+
+
+def run_agent(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str],
+              execve: Exec = os.execve, environ: Mapping[str, str] = os.environ,
+              on_terminal: Callable[[], bool] = _on_terminal) -> None:
+    execute(prepare(paths, keychain, name, extra, environ, on_terminal), execve)

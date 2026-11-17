@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Optional
 
 from cockpit import agents, compat, defaults, legacy
 from cockpit.agents import AgentContext
-from cockpit.config import SERVERS, _read, load_config, origin, save_servers, validate_url
+from cockpit.config import SERVERS, _read, load_config, origin, save_servers, validate_url, with_default_path
 from cockpit.defaults import load_json
 from cockpit.paths import Paths, keychain_service
 from cockpit.registry import Agent, load_agents, save_agents
@@ -202,7 +202,8 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
         notes.append(defaults.install_cockpit_layout(ctx.paths, ctx.backup))
     linked = agents.link_launchers(ctx)
     notes.append("Launchers linked: " + (", ".join(linked) if linked else "unchanged"))
-    servers = {name: url for name, url in (("moshi", options.moshi), ("ocellio", options.ocellio)) if url is not None}
+    servers = {name: with_default_path(name, url) if url else url
+               for name, url in (("moshi", options.moshi), ("ocellio", options.ocellio)) if url is not None}
     if servers:
         changed = save_servers(ctx.paths, ctx.backup, servers)
         notes.append("Servers: " + ", ".join(f"{n} {u or '(removed)'}" for n, u in servers.items())

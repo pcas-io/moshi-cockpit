@@ -1,10 +1,11 @@
 # moshi-cockpit
 
-Herdr mods and a command line tool for running coding agents on [moshi](https://moshi.example.com), an
-async message mesh for AI agents. It is built for people who run several agents and want each one to have
+Herdr mods and a command line tool for running coding agents on moshi, an async message mesh for AI
+agents. It is built for people who run several agents and want each one to have
 its own identity, a safe default setup and one place to start, move and watch them. moshi is optional; so is
 ocellio, a knowledge graph the agents can read. Without either, the cockpit still manages and starts your
-agents locally.
+agents locally. Agents get their ocellio token through `connect`, which needs moshi for now: ocellio without
+moshi is not supported yet.
 
 What you get inside [Herdr](https://herdr.dev):
 
@@ -24,7 +25,7 @@ against, and [RECIPE.md](RECIPE.md) for the Herdr mod gallery entry.
   warning in `moshi-cockpit doctor`.
 - `curl`, `shasum`, `tar` (all part of macOS).
 - Optional: an address for moshi and one for ocellio. The installer asks for them; leave them empty to use
-  Herdr without them.
+  Herdr without them. On an update it shows the address set now, and an empty answer keeps it.
 
 ## Install
 
@@ -51,39 +52,49 @@ ready, then switches to the cockpit layout (or tells you to press the layout key
 
 ## First start
 
-1. Open Herdr. If moshi is set up and this Mac is not connected yet, the "+" menu shows
-   "Connect to moshi…" and the sidebar shows one line to the same effect.
-2. Choose it. A tab opens and the cockpit starts moshi's device flow: your browser opens the approval page on
+1. Open Herdr. If moshi is set up and this Mac is not connected yet, the connect dialog opens once per Herdr
+   start; after that the "+" menu shows "Connect to moshi…" and the sidebar shows one line to the same effect.
+2. Choose Connect. A tab opens and the cockpit starts moshi's device flow: your browser opens the approval page on
    your moshi, and the tab shows the same code. Compare the two codes. If the browser opened on another
    device, the tab names the page and the code to enter there. Approve in the browser.
-3. The tab ends with `Connected as "<label>"`. The cockpit now holds a device key (read-only) and a
+3. The tab says `Connected as "<label>"`. The cockpit now holds a device key (read-only) and a
    registration token (valid for at most 24 hours) in the macOS Keychain.
 4. If ocellio is set up and its token is missing, the tab asks for it once, with hidden input.
+5. The tab ends with `Done. Back in Herdr, add your first agent with "+ Agent".` and closes when you press
+   Enter.
 
-When the registration token has expired, creating or loading an agent reopens the same dialog; the
-installation and the agents' own tokens stay.
+When the registration token has expired, or the device key is missing or was revoked in the moshi dashboard,
+creating or loading an agent reopens the same dialog; the installation and the agents' own tokens stay.
 
 ## Add an agent
 
 "+ Agent" (in the "+" menu as "New agent…", or in the agents dialog) has two tabs:
 
 - **New:** a name (letters, digits, `_` and `-`), a harness, and optionally a role and an ocellio skill the
-  agent loads at its start. Harnesses are `claude`, `codex`, `vibe`, `agy` and `grok`. A harness whose CLI is
-  not found is greyed out with an **Install** button. Install shows the vendor's own installer command and
-  runs it only after you type yes. If moshi is set up, the agent is created there too and this installation
+  agent loads at its start. Harnesses are `claude`, `codex`, `vibe` and `agy`; `grok` connects through your
+  account and has no identity of its own, so it is not offered here (start it from "+" → Grok). A harness
+  that `moshi-cockpit` does not find is greyed out with an **Install** button; if Herdr finds it but
+  `moshi-cockpit` does not, the note says "found by Herdr, not on moshi-cockpit's PATH". Install opens a tab
+  that shows the vendor's own installer command, runs it only after you type yes, and waits for Enter at the
+  end. If moshi is set up, the agent is created there too and this installation
   gets a token of its own for it.
 - **From moshi:** agents that exist in moshi and are not on this Mac yet. Pick one to load it. Agents that run
   elsewhere are marked "Running on <installation>".
 
 Start an agent from the sidebar or the menu; the session picker lets you resume an earlier session.
 
+Each agent's Vibe profile (`config.toml`) is written by the cockpit: hand edits to it are replaced on the next
+`install` and whenever the agent's setup is written again.
+
 ## Takeover between installations
 
 An agent token is bound to one installation, and moshi accepts messages for an agent only from the
 installation that is active for it. Starting an agent here makes this installation the active one. If another
 installation holds it, the cockpit asks first: "Running on <label>. Take over here?" **Take over** starts it
-here and, from then on, the messages arrive here only. **Cancel** starts nothing. The CLI does the same with
-`run --take-over`. See [docs/security.md](docs/security.md) for what takeover does and does not guarantee.
+here and, from then on, the messages arrive here only. **Cancel** starts nothing. `run` in a terminal asks the
+same question; without a terminal it exits with `4`, and `run --take-over` starts it here. Nothing is taken over
+before the start is ready: an agent whose CLI cannot be found stays where it is. In a Herdr tab, a failed start
+waits for Enter so you can read why. See [docs/security.md](docs/security.md) for what takeover does and does not guarantee.
 
 If moshi cannot be reached when you start an agent, the agent still starts locally with one warning line,
 and activation is skipped.
@@ -94,8 +105,8 @@ and activation is skipped.
 
 | Command | What it does |
 |---|---|
-| `install [--moshi URL] [--ocellio URL]` | Set up the cockpit in the Herdr you installed. A URL is the server's address (`https://…/mcp`); an empty string (`""`) removes it. Without a flag a setting stays as it is. |
-| `uninstall` | Restore every change from the backups. Keychain entries and Herdr itself stay. |
+| `install [--moshi URL] [--ocellio URL]` | Set up the cockpit in the Herdr you installed. A URL is the server's address (`https://…/mcp`; an address without a path gets `/mcp`, or `/mcp/` for ocellio); an empty string (`""`) removes it. Without a flag a setting stays as it is. |
+| `uninstall` | Restore every change from the backups. Your settings in `~/.config/moshi-cockpit/`, the Keychain entries and Herdr itself stay. |
 | `connect` | Connect this Herdr to moshi with one approval in the browser. |
 | `migrate` | Move the agents of an earlier setup to this installation (after `connect`). |
 | `run [--take-over] AGENT [ARGS…]` | Start an agent through its harness. `--take-over` starts it here even when another installation holds it. Arguments after the name go to the harness. |
@@ -119,8 +130,8 @@ and activation is skipped.
 |---|---|
 | `0` | Success. |
 | `1` | Error; the message says what to do. |
-| `3` | Approval required: the registration token is missing, expired or refused. Run `moshi-cockpit connect`. The mods reopen the connect dialog on this code. |
-| `4` | The agent is active on another installation. Standard output is JSON, `{"active": "<label>"}`; use `--take-over` to start it here. |
+| `3` | Approval required: the registration token is missing, expired or refused, or the device key is missing or revoked. Run `moshi-cockpit connect`. The mods reopen the connect dialog on this code. |
+| `4` | The agent is active on another installation. Without a terminal, standard output is JSON, `{"active": "<label>"}`; use `--take-over` to start it here. In a terminal `run` asks instead and exits with `4` on a no. |
 
 An interrupted command exits with `130`.
 
@@ -130,16 +141,25 @@ An interrupted command exits with `130`.
 moshi-cockpit uninstall
 ```
 
-restores every file the cockpit changed from its backups, including the link in `~/.local/bin`. Keychain
-entries and Herdr itself stay, and so does the downloaded app folder `~/.local/share/moshi-cockpit/`, which you
-can delete by hand. To drop the tokens, remove the entries named in [docs/security.md](docs/security.md) in Keychain Access, and revoke the
-installation in the moshi dashboard.
+restores every file the cockpit changed from its backups, including the link in `~/.local/bin`. A file whose
+backup is missing is left as it is and named in the output. What stays, so that a later install picks up where
+you left off:
+
+- your settings in `~/.config/moshi-cockpit/` (`config.json`, `agents.json`, `rules.md`),
+- the Keychain entries (`moshi-…` and `ocellio-…`, see [docs/security.md](docs/security.md)),
+- the downloaded app in `~/.local/share/moshi-cockpit/` and the state folder `~/.local/state/moshi-cockpit/`,
+- Herdr itself.
+
+To remove them by hand: `rm -rf ~/.config/moshi-cockpit ~/.local/share/moshi-cockpit ~/.local/state/moshi-cockpit`,
+delete the `moshi-…` and `ocellio-…` entries in Keychain Access, and revoke the installation in the moshi
+dashboard.
 
 ## Moving an earlier setup
 
 If you ran the cockpit under its earlier name, `install` finds that setup and imports it once: it undoes the
-earlier changes to Herdr, then carries over servers, agents, your own rules and the ocellio token. The old
-folders are only read. Then:
+earlier changes to Herdr (its backup files are moved back into place and its list of changes is cleared),
+then carries over servers, agents, your own rules and the ocellio token. Its config folder is only read.
+Then:
 
 1. `moshi-cockpit connect` (or "Connect to moshi…" in Herdr), approve in the browser.
 2. `moshi-cockpit migrate` adopts each agent's earlier token for this installation. The tokens themselves
