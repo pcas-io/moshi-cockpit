@@ -242,6 +242,19 @@ class PublicTextTest(unittest.TestCase):
         self.assertEqual((code, out), (1, "ref: blocked-word\n"))
         self.assertEqual(self.run_guard(["--refs", "feat/clean", "v1.0.0"]), (0, ""))
 
+    def test_text_mode_survives_bytes_that_are_not_utf8(self):
+        stdin = io.TextIOWrapper(io.BytesIO(b"fine\n\xff\xfe " + WORD.encode() + b"\n"), encoding="ascii")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = leak_check.main(["--text", "-"], words=WORDS, stdin=stdin)
+        self.assertEqual((code, out.getvalue()), (1, "-:2: blocked-word\n"))
+
+    def test_the_modes_exclude_each_other(self):
+        for argv in (["--text", "-", "--refs", "a"], ["--commits", "HEAD", "--refs", "a"]):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                leak_check.main(argv, words=WORDS)
+            self.assertEqual(raised.exception.code, 2)
+
     def test_text_and_refs_fail_closed_without_the_word_list(self):
         for argv in (["--text", "-"], ["--refs", "main"]):
             err = io.StringIO()
@@ -254,13 +267,13 @@ class PublicTextTest(unittest.TestCase):
 class PrePushHookTest(unittest.TestCase):
     HOOK = TOOL.parent / "hooks" / "pre-push"
 
-    def push(self, local: str, remote: str):
+    def push(self, local: str, remote: str, newline: str = "\n", words_text: str = None):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         words = Path(tmp.name) / "words.txt"
-        words.write_text(f"{WORD}\n")
+        words.write_text(f"{WORD}\n" if words_text is None else words_text)
         env = dict(os.environ, MOSHI_COCKPIT_BLOCKED_WORDS=str(words))
-        line = f"{local} {'a' * 40} {remote} {'0' * 40}\n"
+        line = f"{local} {'a' * 40} {remote} {'0' * 40}{newline}"
         return subprocess.run(["sh", str(self.HOOK), "origin", "url"], input=line, env=env,
                               capture_output=True, text=True, cwd=TOOL.parent.parent)
 
@@ -272,6 +285,21 @@ class PrePushHookTest(unittest.TestCase):
                 self.assertIn("ref: blocked-word", done.stdout)
                 self.assertNotIn(WORD, done.stdout + done.stderr)
                 self.assertNotIn("== ", done.stdout)  # refused before the full check ran
+
+    def test_pre_push_checks_a_last_line_without_a_newline(self):
+        done = self.push(f"refs/heads/{WORD}", "refs/heads/ok", newline="")
+        self.assertEqual((done.returncode, "ref: blocked-word" in done.stdout), (1, True))
+
+    def test_pre_push_passes_a_ref_that_starts_with_a_dash_as_a_name(self):
+        done = self.push(f"refs/heads/-{WORD}", "refs/heads/ok")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("ref: blocked-word", done.stdout)
+        self.assertNotIn("usage", done.stderr)
+
+    def test_pre_push_without_the_word_list_stops_before_the_full_check(self):
+        done = self.push("refs/heads/ok", "refs/heads/ok", words_text="# none\n")
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn("== ", done.stdout)
 
 
 if __name__ == "__main__":

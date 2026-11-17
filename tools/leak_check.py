@@ -138,9 +138,12 @@ def scan_text(names: List[str], words: frozenset, stdin: IO[str]) -> List[str]:
     findings = []
     for name in names:
         try:
-            text = stdin.read() if name == "-" else Path(name).read_text(errors="replace")
-        except OSError:
-            findings.append(f"{shown_path(Path(name).name, words)}:0: unreadable")
+            if name == "-":
+                text = stdin.buffer.read().decode("utf-8", "replace") if hasattr(stdin, "buffer") else stdin.read()
+            else:
+                text = Path(name).read_text(errors="replace")
+        except (OSError, ValueError):
+            findings.append("-:0: unreadable" if name == "-" else f"{shown_path(Path(name).name, words)}:0: unreadable")
             continue
         shown = "-" if name == "-" else shown_path(Path(name).name, words)
         if name != "-":
@@ -162,16 +165,31 @@ def scan_refs(refs: List[str], words: frozenset) -> List[str]:
 def main(argv: Optional[List[str]] = None, words: Optional[frozenset] = None, cwd: Optional[Path] = None,
          git: Git = run_git, env: Optional[Mapping[str, str]] = None, stdin: Optional[IO[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Scan files or commits for internal data.")
-    parser.add_argument("--commits", metavar="RANGE", help="scan commit metadata in RANGE instead of files")
-    parser.add_argument("--text", nargs="+", metavar="FILE", help="scan text files (`-` is stdin) instead of the tree")
-    parser.add_argument("--refs", nargs="+", metavar="REF", help="scan branch and tag names instead of the tree")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--commits", metavar="RANGE", help="scan commit metadata in RANGE instead of files")
+    mode.add_argument("--text", nargs="*", metavar="FILE", help="scan text files (`-` is stdin) instead of the tree")
+    mode.add_argument("--refs", nargs="*", metavar="REF", help="scan branch and tag names instead of the tree")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tail: List[str] = []
+    if "--" in argv:  # everything after `--` is a name, even one that starts with `-`
+        cut = argv.index("--")
+        argv, tail = argv[:cut], argv[cut + 1:]
     args = parser.parse_args(argv)
+    if tail:
+        if args.text is not None:
+            args.text += tail
+        elif args.refs is not None:
+            args.refs += tail
+        else:
+            parser.error("`--` needs --text or --refs before it")
+    if not (args.text or args.refs or args.commits) and (args.text is not None or args.refs is not None):
+        parser.error("--text and --refs need at least one name")
     if words is None:
         words = load_words(os.environ if env is None else env)
     if not words:
         print(NO_WORDS, file=sys.stderr)
         return 2
-    if args.text or args.refs:
+    if args.text is not None or args.refs is not None:
         findings = scan_text(args.text or [], words, stdin or sys.stdin) + scan_refs(args.refs or [], words)
         for finding in findings:
             print(finding)
