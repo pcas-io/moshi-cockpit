@@ -8,8 +8,9 @@ import sys
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, connect, doctor, installer, launch, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, installer, launch, registry, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
+from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
 from cockpit.config import SERVERS, load_config, require, save_rules
 from cockpit.harnesses import Ctx
@@ -20,9 +21,10 @@ from cockpit.registry import load_agents
 from cockpit.secrets import KeychainError, default_store
 from cockpit.text import clean
 
-# The panel's "+ Agent" passes --connect and its "Remove" --keep-moshi; both are accepted and change nothing.
+# The panel's "+ Agent" still passes --connect and its "Remove" --keep-moshi (until the mods follow the new
+# flow); both are accepted and change nothing: with moshi set up, add always creates the agent there.
 PANEL_FLAG = "accepted for the Herdr panel; changes nothing"
-NOT_CONNECTED = "{name} is not connected to the servers: this version cannot connect agents yet"
+APPROVAL_EXIT = 3  # shared with the mods: the panel opens the connect dialog
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,19 +54,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     agt = sub.add_parser("agent", help="manage agents (name, harness, role)")
     agt_sub = agt.add_subparsers(dest="agent_command", required=True)
-    agt_add = agt_sub.add_parser("add", help="create an agent; without arguments as a guided assistant")
+    agt_add = agt_sub.add_parser("add", help="create an agent (in moshi too, when set up); without arguments guided")
     agt_add.add_argument("name", nargs="?")
     agt_add.add_argument("--harness", help="claude, codex, vibe or agy")
     agt_add.add_argument("--role", help="role and personality in a few words")
     agt_add.add_argument("--skill", default="", help="name of an ocellio skill the agent loads at its start")
     agt_add.add_argument("--connect", action="store_true", help=PANEL_FLAG)
-    agt_set = agt_sub.add_parser("set", help="change an agent's role or skill")
+    agt_load = agt_sub.add_parser("load", help="add an agent that exists in moshi to this Mac")
+    agt_load.add_argument("name")
+    agt_cat = agt_sub.add_parser("catalog", help="moshi's agents that are not on this Mac yet")
+    agt_cat.add_argument("--json", action="store_true")
+    agt_set = agt_sub.add_parser("set", help="change an agent's role or skill (here and in moshi)")
     agt_set.add_argument("name")
     agt_set.add_argument("--role", help="new role; empty deletes it")
     agt_set.add_argument("--skill", help="new skill; empty deletes it")
     agt_list = agt_sub.add_parser("list", help="show the agents")
     agt_list.add_argument("--json", action="store_true")
-    agt_rm = agt_sub.add_parser("remove", help="remove an agent from this Mac: Keychain entries and list entry")
+    agt_rm = agt_sub.add_parser("remove", help="remove an agent from this Mac; it stays in moshi")
     agt_rm.add_argument("name")
     agt_rm.add_argument("--keep-moshi", action="store_true", help=PANEL_FLAG)
 
@@ -179,46 +185,81 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
 
 def cmd_agent(args: argparse.Namespace, paths: Paths) -> int:
     ctx = _context(paths)
-    if args.agent_command == "set":
-        changed = registry.update(paths, ctx.backup, args.name, args.role, args.skill)
-        print(f"• {changed.name} updated")
-        for note in wizard.skill_note(ctx, changed.skill):
-            print(f"! {note}")
-        try:  # vibe and agy keep these rules in a file
-            agent_files.setup(ctx, changed)
-        except ValueError as exc:
-            print(f"! Takes effect once the agent is connected: {clean(str(exc), '?', limit=300)}")
-        return 0
-    if args.agent_command == "list":
-        found = load_agents(paths, enforce=False)
-        if args.json:
-            config = load_config(paths)
-            print(json.dumps({"agents": status.local_agents(paths, config, ctx.keychain),
-                              "harnesses": wizard.harness_offer(paths),
-                              "servers": {name: config.has(name) for name in SERVERS}}, ensure_ascii=False))
-        else:
-            for a in found:
-                print(f"{a.name:<20}{a.harness:<10}{a.role}")
-            print(f"{len(found)} agent(s)")
-            for problem in registry.single_instance_problems(found):
-                print(f"Note: {problem}")
-        return 0
-    if args.agent_command == "remove":
-        for note in removal.remove_agent(ctx, args.name):
-            print(f"• {note}")
-        return 0
+    handler = {"set": _agent_set, "list": _agent_list, "remove": _agent_remove, "load": _agent_load,
+               "catalog": _agent_catalog}.get(args.agent_command, _agent_add)
+    return handler(ctx, args)
+
+
+def _agent_add(ctx: AgentContext, args: argparse.Namespace) -> int:
     if args.name and args.harness:
-        for note in wizard.create(ctx, args.name, args.harness, args.role or "", args.skill):
-            print(f"• {note}")
-        if wizard.wants_servers(ctx, args.harness):
-            print(f"! {NOT_CONNECTED.format(name=registry.find(paths, args.name).name)}")
-        else:
-            print(f"\nStart it from the \"+\" menu or with moshi-cockpit run {args.name}")
-        return 0
-    if not sys.stdin.isatty():
+        notes = wizard.create(ctx, args.name, args.harness, args.role or "", args.skill) + [wizard.start_hint(args.name)]
+    elif not sys.stdin.isatty():
         raise ValueError("Without a terminal, agent add needs a name and --harness")
-    for note in wizard.run(ctx, name=args.name, harness=args.harness, role=args.role, skill=args.skill):
+    else:
+        notes = wizard.run(ctx, name=args.name, harness=args.harness, role=args.role, skill=args.skill)
+    for note in notes:
         print(f"• {note}")
+    return 0
+
+
+def _agent_load(ctx: AgentContext, args: argparse.Namespace) -> int:
+    agent = agents_remote.load(ctx, args.name)
+    print(f"• Agent {agent.name} ({agent.harness}) loaded from moshi")
+    for note in agents_remote.notes(ctx, agent) + wizard.skill_note(ctx, agent.skill):
+        print(f"• {note}")
+    print(f"• {wizard.start_hint(agent.name)}")
+    return 0
+
+
+def _agent_catalog(ctx: AgentContext, args: argparse.Namespace) -> int:
+    rows = agents_remote.catalog(ctx)
+    if args.json:
+        print(json.dumps({"agents": rows}, ensure_ascii=False))
+        return 0
+    for row in rows:
+        where = f"running on {row['active_installation']}" if row["active_installation"] else ""
+        print(f"{row['name']:<20}{row['harness']:<10}{row['role'][:30]:<32}{where}")
+    print(f"{len(rows)} agent(s) in moshi that are not here yet")
+    return 0
+
+
+def _agent_set(ctx: AgentContext, args: argparse.Namespace) -> int:
+    changed, warnings = agents_remote.set_profile(ctx, args.name, args.role, args.skill)
+    print(f"• {changed.name} updated")
+    for warning in warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    for note in wizard.skill_note(ctx, changed.skill):
+        print(f"! {note}")
+    try:  # vibe and agy keep these rules in a file
+        agent_files.setup(ctx, changed)
+    except ValueError as exc:
+        print(f"! Takes effect once the agent is connected: {clean(str(exc), '?', limit=300)}")
+    return 0
+
+
+def _agent_list(ctx: AgentContext, args: argparse.Namespace) -> int:
+    paths = ctx.paths
+    found = load_agents(paths, enforce=False)
+    if args.json:
+        config = load_config(paths)
+        print(json.dumps({"agents": status.local_agents(paths, config, ctx.keychain),
+                          "harnesses": wizard.harness_offer(paths),
+                          "servers": {name: config.has(name) for name in SERVERS}}, ensure_ascii=False))
+        return 0
+    for a in found:
+        print(f"{a.name:<20}{a.harness:<10}{a.role}")
+    print(f"{len(found)} agent(s)")
+    for problem in registry.single_instance_problems(found):
+        print(f"Note: {problem}")
+    return 0
+
+
+def _agent_remove(ctx: AgentContext, args: argparse.Namespace) -> int:
+    notes, warnings = removal.remove_agent(ctx, args.name)
+    for note in notes:
+        print(f"• {note}")
+    for warning in warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
 
@@ -261,6 +302,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](args, Paths.from_env())
+    except ApprovalRequired as exc:
+        print(clean(str(exc), "?", limit=500), file=sys.stderr)
+        return APPROVAL_EXIT
+    except MoshiError as exc:
+        print(f"Error: {clean(str(agents_remote.refusal(exc)), '?', limit=500)}", file=sys.stderr)
+        return 1
     except (KeychainError, McpError, ValueError) as exc:
         print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
         return 1

@@ -9,6 +9,7 @@ from typing import List
 from cockpit.backup import BackupStore
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES, Ctx
+from cockpit.harnesses.base import CONNECT_HINT, MOVED_HINT
 from cockpit.secrets import SecretStore
 from cockpit.paths import BIN, Paths
 from cockpit.registry import Agent
@@ -42,22 +43,21 @@ def setup(ctx: AgentContext, agent: Agent) -> List[str]:
     harness = HARNESSES[agent.harness]
     missing = harness.missing_tokens(hctx, agent)
     if missing:
-        raise ValueError(f"{agent.name}: Keychain-Einträge fehlen ({', '.join(missing)}), "
-                         f"moshi-cockpit bot add {agent.name}")
+        raise ValueError(f"{agent.name}: Keychain entries missing ({', '.join(missing)}): {CONNECT_HINT}")
     return harness.setup(hctx, agent)
 
 
 def findings(ctx: AgentContext, agent: Agent) -> List[str]:
+    """doctor's wording; doctor._agent_action matches on it."""
     hctx = harness_ctx(ctx)
     harness = HARNESSES[agent.harness]
-    found = [f"Keychain-Eintrag fehlt: {svc}" for svc in harness.missing_tokens(hctx, agent)]
+    found = [f"Keychain entry missing: {svc}" for svc in harness.missing_tokens(hctx, agent)]
     for server in harness.origin_mismatches(hctx, agent):
         if agent.bound.get(server):
-            found.append(f"Origin-Mismatch {server}: Token gebunden an {agent.bound[server]}, Config zeigt auf "
-                         f"{hctx.config.servers[server]}; es wird kein Token gesetzt (absichtlich? bot add {agent.name} --rebind)")
+            found.append(f"Origin mismatch {server}: token bound to {agent.bound[server]}, the config points to "
+                         f"{hctx.config.servers[server]}; no token is set ({MOVED_HINT})")
         else:
-            found.append(f"{server}-Token noch an keinen Server gebunden; es wird kein Token gesetzt "
-                         f"(moshi-cockpit bot add {agent.name})")
+            found.append(f"{server} token not bound to a server yet; no token is set ({CONNECT_HINT})")
     if not harness.installed(ctx.paths):
-        found.append(f"{harness.binary} nicht installiert")
+        found.append(f"{harness.binary} not installed")
     return found + harness.findings(hctx, agent)

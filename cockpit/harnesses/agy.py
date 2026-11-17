@@ -42,7 +42,7 @@ class Agy(Harness):
     name = "agy"
     binary = "agy"
     single_instance = True
-    single_reason = "liest eine globale Config"
+    single_reason = "reads one global config"
     resume_flag = ("--conversation",)
 
     def map_extra(self, extra: Sequence[str]) -> List[str]:

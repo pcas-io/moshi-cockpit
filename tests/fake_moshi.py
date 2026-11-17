@@ -70,7 +70,7 @@ def parse_profile(body: Dict[str, Any]) -> Dict[str, Any]:
         if role is not None and not isinstance(role, str):
             return {"error": "role: a string"}
         trimmed = (role or "").strip()
-        if len(trimmed) > ROLE_MAX:
+        if len(trimmed.encode("utf-16-le")) // 2 > ROLE_MAX:  # JS `.length`: UTF-16 units
             return {"error": f"role: at most {ROLE_MAX} characters"}
         if CONTROL.search(trimmed):
             return {"error": "role: no control characters"}

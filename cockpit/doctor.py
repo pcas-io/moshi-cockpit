@@ -233,11 +233,11 @@ def _action(check: Check) -> str:
 
 def _agent_action(agent: str, detail: str) -> str:
     """Goes by the first kind of finding, in the order agents.findings reports them (its wording)."""
-    if "Keychain-Eintrag fehlt" in detail or "an keinen Server gebunden" in detail:
+    if "Keychain entry missing" in detail or "not bound to a server" in detail:
         return f"Agent {agent} is not fully connected to the servers: {detail}"
-    if "Origin-Mismatch" in detail:
+    if "Origin mismatch" in detail:
         return f"Agent {agent} is bound to another server than the configured one: {detail}"
-    if "nicht installiert" in detail:
+    if "not installed" in detail:
         return f"Agent {agent}: {detail}. Install the CLI"
     if "nicht 0600" in detail:
         return f"Agent {agent}: {detail}. Reset the file with chmod 600"

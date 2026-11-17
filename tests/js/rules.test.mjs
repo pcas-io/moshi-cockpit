@@ -20,10 +20,11 @@ test("names follow moshi's rule and the reserved list", () => {
 test("roles lose control characters and are bounded like registry._validate", () => {
   assert.equal(roleText("  Recherche \u001b[31m und\tSuche\n "), "Recherche [31m und Suche");
   assert.equal(roleText("\u0000"), "");
-  assert.equal(roleText("x".repeat(200)).length, 120);
-  const cut = roleText("x".repeat(119) + "😀😀");  // code points, like Python: no lone surrogate
-  assert.equal(Array.from(cut).length, 120);
-  assert.ok(cut.endsWith("😀"));
+  assert.equal(roleText("x".repeat(200)).length, 64);
+  // UTF-16 units, like moshi's `.length`: an emoji counts 2 and is never cut in half
+  assert.equal(roleText("x".repeat(63) + "😀"), "x".repeat(63));
+  assert.equal(roleText("x".repeat(62) + "😀😀"), "x".repeat(62) + "😀");
+  assert.equal(roleText("😀".repeat(40)).length, 64);
 });
 
 test("arguments never let a value become an option", () => {

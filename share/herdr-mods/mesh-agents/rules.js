@@ -5,7 +5,7 @@
 // moshi's agent name rule (fullmatch) and the names moshi-cockpit reserves (registry.NAME_RE, RESERVED).
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const RESERVED = new Set(["admin", "broadcast", "cockpit", "default", "device", "register"]);
-export const MAX_ROLE = 120;
+export const MAX_ROLE = 64;  // moshi's FIELD_LIMITS.ROLE, like registry.MAX_ROLE
 
 export function checkName(raw, local) {
   const name = String(raw ?? "");
@@ -16,10 +16,19 @@ export function checkName(raw, local) {
 }
 
 // Role: one line, control characters out, bounded, like registry._validate.
-export const roleText = (raw) => String(raw ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
-  .split(/\s+/).filter(Boolean).join(" ")
-  // By code point like Python's [:120]: an emoji at the edge is never cut in half.
-  .match(/[\s\S]/gu)?.slice(0, MAX_ROLE).join("") ?? "";
+export const roleText = (raw) => boundRole(String(raw ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+  .split(/\s+/).filter(Boolean).join(" "));
+
+// At most MAX_ROLE UTF-16 units, as moshi counts (`.length`), never cutting a character in half
+// (registry.bound_role).
+const boundRole = (text) => {
+  let out = "";
+  for (const char of text) {
+    if (out.length + char.length > MAX_ROLE) break;
+    out += char;
+  }
+  return out;
+};
 
 // An ocellio skill name: optional, the same characters as an agent name (registry._validate).
 export const checkSkill = (raw) => (!raw || NAME_RE.test(String(raw)) ? null : "Skill: letters, digits, _ and - only");

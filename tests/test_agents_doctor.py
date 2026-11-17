@@ -301,18 +301,17 @@ class DefaultsDoctorTest(unittest.TestCase):
 
 
 class AgentCommandTest(unittest.TestCase):
-    def test_add_with_the_panels_connect_flag_says_it_is_not_connected(self):
+    def test_add_with_moshi_but_no_approval_exits_3_and_creates_nothing(self):
         import io as _io
-        from contextlib import redirect_stdout
         paths = temp_paths(self)
-        configure(paths)  # moshi and ocellio configured
+        configure(paths)  # moshi and ocellio configured, this Herdr not connected
         with mock.patch("cockpit.cli.Paths.from_env", return_value=paths), \
                 mock.patch("cockpit.cli.default_store", return_value=MacKeychain(FakeSecurity())), \
                 mock.patch("cockpit.harnesses.base.Harness.installed", return_value=True), \
-                redirect_stdout(_io.StringIO()) as out:
-            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "codex", "--connect"]), 0)
-        self.assertIn("! x is not connected to the servers", out.getvalue())
-        self.assertEqual([a.name for a in registry.load_agents(paths)], ["x"])
+                redirect_stderr(_io.StringIO()) as err:
+            self.assertEqual(cli.main(["agent", "add", "x", "--harness", "codex", "--connect"]), 3)  # flag still accepted
+        self.assertIn("moshi-cockpit connect", err.getvalue())
+        self.assertEqual(registry.load_agents(paths), [])
 
     def test_add_list_remove_and_rules(self):
         import io as _io

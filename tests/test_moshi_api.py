@@ -223,6 +223,9 @@ class MoshiApiTest(unittest.TestCase):
         self.assertEqual((self.moshi.agent("scout")["role"], self.moshi.agent("scout")["skill"]), ("reviewer", "b"))
         self.api.update_profile(token, "", None)
         self.assertIsNone(self.moshi.agent("scout")["role"])  # empty clears it
+        self.api.update_profile(token, None, "")
+        self.assertEqual(self.moshi.calls("PATCH", "/api/agent/profile")[2]["body"], {"skill": None})
+        self.assertIsNone(self.moshi.agent("scout")["skill"])  # sent as null: moshi refuses an empty name
         self.assertError(self.error_of(self.api.update_profile, token, None, "no spaces"), "invalid_profile", 400)
 
     def test_drop_token_ends_it_and_releases_the_agent(self):
