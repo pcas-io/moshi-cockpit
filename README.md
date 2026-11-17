@@ -25,6 +25,19 @@ The leak guard needs a private word list that is never part of the repo: one wor
 `~/.config/moshi-cockpit-dev/blocked-words.txt`, or in the file named by `MOSHI_COCKPIT_BLOCKED_WORDS`.
 Without it the guard stops with exit code 2.
 
+## Publishing
+
+The repo is public, so text that becomes public outside git is checked too. Every PR body, release note,
+comment or repo description is written to a file and passed through the leak guard before `gh` sends it:
+
+```sh
+python3 tools/leak_check.py --text body.md   # `-` reads stdin
+gh pr create --body-file body.md
+```
+
+Any finding blocks publishing; fix the text and run it again. Branch and tag names are checked the same way
+(`--refs NAME...`), and the pre-push hook does it for every ref being pushed.
+
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE).
