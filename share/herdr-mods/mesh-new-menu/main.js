@@ -1,6 +1,7 @@
 // The "+" menu of the cockpit layout: herdr's new-menu (Apache-2.0) with the harnesses, plus "New agent…" and
-// "Manage agents…". A harness opens its session list, where its own agents are too. moshi-cockpit generates the
-// entries of the own agents into programs.json with this prefix; this menu leaves them out.
+// "Manage agents…". A harness opens its session list, where its own agents are too (an own agent starts there,
+// after the takeover check of mesh-agents/start.js). moshi-cockpit generates the entries of the own agents into
+// programs.json with this prefix; this menu leaves them out, so no own agent starts here without that check.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, panes, knownAgents, run, openOverlay, closeOverlay, props, window, keys, shared, setShared, home } from "herdr";
@@ -100,8 +101,8 @@ export default class MeshNewMenu extends View {
         .children(choices.map((a, i) => this.agentRow(a, space, i + 1)))
         .when(this.agents.length === 0, el => el.child(div().px(9).py(6).text_color(t.dim).child(this.failed ? "Could not load agents" : "Checking installed agents…"))))
       .child(this.divider())
-      .when(!!shared("moshi-cockpit.needs-connect"), el => el.child(this.row("connect", div().w(14).child("→"), "Mit moshi verbinden…",
-        () => run("tab.new", { name: "Mit moshi verbinden", space: space?.id, argv: [`${home()}/.local/bin/moshi-cockpit`, "connect"] }))))
+      .when(!!shared("moshi-cockpit.needs-connect"), el => el.child(this.row("connect", div().w(14).child("→"), "Connect to moshi…",
+        () => run("tab.new", { name: "Connect to moshi", space: space?.id, argv: [`${home()}/.local/bin/moshi-cockpit`, "connect"] }))))
       .child(this.row("agent-new", div().w(14).child("+"), "New agent…", () => this.manage("new")))
       .child(this.row("agent-manage", div().w(14).child("≡"), "Manage agents…", () => this.manage("manage")))
       .child(this.divider())

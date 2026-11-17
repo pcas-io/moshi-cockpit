@@ -21,9 +21,6 @@ from cockpit.registry import load_agents
 from cockpit.secrets import KeychainError, default_store
 from cockpit.text import clean
 
-# The panel's "+ Agent" still passes --connect and its "Remove" --keep-moshi (until the mods follow the new
-# flow); both are accepted and change nothing: with moshi set up, add always creates the agent there.
-PANEL_FLAG = "accepted for the Herdr panel; changes nothing"
 APPROVAL_EXIT = 3  # shared with the mods: the panel opens the connect dialog
 ACTIVE_ELSEWHERE_EXIT = 4  # shared with the mods: stdout {"active": label}, the panel offers a takeover
 TAKE_OVER = "--take-over"
@@ -62,7 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
     agt_add.add_argument("--harness", help="claude, codex, vibe or agy")
     agt_add.add_argument("--role", help="role and personality in a few words")
     agt_add.add_argument("--skill", default="", help="name of an ocellio skill the agent loads at its start")
-    agt_add.add_argument("--connect", action="store_true", help=PANEL_FLAG)
     agt_load = agt_sub.add_parser("load", help="add an agent that exists in moshi to this Mac")
     agt_load.add_argument("name")
     agt_cat = agt_sub.add_parser("catalog", help="moshi's agents that are not on this Mac yet")
@@ -78,7 +74,6 @@ def build_parser() -> argparse.ArgumentParser:
     agt_list.add_argument("--json", action="store_true")
     agt_rm = agt_sub.add_parser("remove", help="remove an agent from this Mac; it stays in moshi")
     agt_rm.add_argument("name")
-    agt_rm.add_argument("--keep-moshi", action="store_true", help=PANEL_FLAG)
 
     rul = sub.add_parser("rules", help="your own rules for every agent (e.g. data classes); install never overwrites them")
     rul_sub = rul.add_subparsers(dest="rules_command", required=True)

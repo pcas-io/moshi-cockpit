@@ -87,7 +87,7 @@ class RemoteAgentsTest(ConnectedHerdr, unittest.TestCase):
         self.assert_no_secret()
 
     def test_add_through_the_cli_prints_no_token(self):
-        code, out, err = self.cli("agent", "add", "scout", "--harness=codex", "--role=Research", "--connect")
+        code, out, err = self.cli("agent", "add", "scout", "--harness=codex", "--role=Research")
         self.assertEqual(code, 0, err)
         self.assertIn("scout", out)
         self.assertIsNotNone(self.moshi.agent("scout"))

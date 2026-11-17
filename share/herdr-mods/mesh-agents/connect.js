@@ -1,14 +1,22 @@
-// The first screen on a new Mac: one sentence, one button. The tokens are asked for by
-// `moshi-cockpit connect` in a terminal tab; this mod never sees them.
+// The connect dialog: one sentence, one button. `moshi-cockpit connect` runs in a terminal tab and opens moshi's
+// page in the browser; this mod never sees a token.
 
 import { div } from "gpui-kit";
 import { v_flex } from "gpui-base";
-import { home, run, props, closeOverlay } from "herdr";
+import { home, run, props, closeOverlay, openOverlay } from "herdr";
 import { btn } from "./util.js";
 
+export const CONNECT_TITLE = "Connect to moshi";
+
 function connect() {
-  run("tab.new", { name: "Mit moshi verbinden", argv: [`${home()}/.local/bin/moshi-cockpit`, "connect"] });
+  run("tab.new", { name: CONNECT_TITLE, argv: [`${home()}/.local/bin/moshi-cockpit`, "connect"] });
   closeOverlay(props().overlay);
+}
+
+// From any view of this mod: closes it (when `overlay` is given) and opens the connect dialog instead.
+export function openConnect(overlay) {
+  if (overlay) closeOverlay(overlay);
+  openOverlay({ mod: "mesh-agents", kind: "dialog", width: 420, height: 220, props: { view: "connect" } });
 }
 
 export function connectKey(e) {
@@ -17,7 +25,7 @@ export function connectKey(e) {
 
 export function connectView(t) {
   return v_flex().size_full().bg(t.popover).p(24).gap(12).items_center().justify_center()
-    .child(div().font_semibold().text_size(16).text_color(t.foreground).child("Willkommen in deinem Cockpit"))
-    .child(div().text_size(13).text_color(t.dim).text_center().child("Verbinde diesen Mac, damit deine Agents zusammenarbeiten können."))
-    .child(div().pt(6).child(btn("connect-moshi", t, "Mit moshi verbinden", connect, { primary: true })));
+    .child(div().font_semibold().text_size(16).text_color(t.foreground).child(CONNECT_TITLE))
+    .child(div().text_size(13).text_color(t.dim).text_center().child("Confirm once in your browser. Nothing to copy."))
+    .child(div().pt(6).child(btn("connect-moshi", t, "Connect", connect, { primary: true })));
 }

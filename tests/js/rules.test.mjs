@@ -1,7 +1,7 @@
 // Parity of the dialog's checks with cockpit/registry.py. Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addArgs, checkName, checkSkill, removeArgs, roleText, setArgs } from "../../share/herdr-mods/mesh-agents/rules.js";
+import { addArgs, checkName, checkSkill, loadArgs, removeArgs, roleText, runArgv, setArgs, whereArgs } from "../../share/herdr-mods/mesh-agents/rules.js";
 import { ownAgents, runningTerminal } from "../../share/herdr-mods/moshi/list.js";
 
 test("names follow moshi's rule and the reserved list", () => {
@@ -29,18 +29,24 @@ test("roles lose control characters and are bounded like registry._validate", ()
 
 test("arguments never let a value become an option", () => {
   assert.deepEqual(addArgs("a", "codex", ""), ["agent", "add", "a", "--harness=codex"]);
-  assert.deepEqual(addArgs("a", "codex", "", true), ["agent", "add", "a", "--harness=codex", "--connect"]);
   assert.deepEqual(addArgs("a", "codex", "--rebind"), ["agent", "add", "a", "--harness=codex", "--role=--rebind"]);
-  assert.deepEqual(removeArgs("a"), ["agent", "remove", "a", "--keep-moshi"]);
-  assert.deepEqual(removeArgs("a", true), ["agent", "remove", "a", "--revoke-moshi"]);
+  assert.deepEqual(removeArgs("a"), ["agent", "remove", "a"]);
   assert.throws(() => removeArgs("--help"));
+  assert.deepEqual(loadArgs("scout"), ["agent", "load", "scout"]);
+  assert.throws(() => loadArgs("--take-over"));
+  assert.deepEqual(whereArgs("scout"), ["agent", "where", "scout", "--json"]);
+  assert.throws(() => whereArgs("-x"));
+  // --take-over right after the name is the CLI's; everything later goes to the harness
+  assert.deepEqual(runArgv("/c", "scout", false, ["resume", "1"]), ["/c", "run", "scout", "resume", "1"]);
+  assert.deepEqual(runArgv("/c", "scout", true, ["resume", "1"]), ["/c", "run", "scout", "--take-over", "resume", "1"]);
+  assert.throws(() => runArgv("/c", "--take-over", false));
 });
 
 test("skill names follow the agent name rule and never become options", () => {
   assert.equal(checkSkill(""), null);
   assert.equal(checkSkill("skill-a"), null);
   for (const bad of ["a b", "-x", "../x", "a`b"]) assert.notEqual(checkSkill(bad), null, bad);
-  assert.deepEqual(addArgs("a", "codex", "", true, "skill-b"), ["agent", "add", "a", "--harness=codex", "--skill=skill-b", "--connect"]);
+  assert.deepEqual(addArgs("a", "codex", "", "skill-b"), ["agent", "add", "a", "--harness=codex", "--skill=skill-b"]);
   assert.deepEqual(setArgs("a", "", ""), ["agent", "set", "a", "--role=", "--skill="]);
   assert.throws(() => setArgs("--x", "", ""));
 });
