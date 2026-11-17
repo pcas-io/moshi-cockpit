@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -199,6 +200,78 @@ class WordListTest(unittest.TestCase):
         self.assertFalse(hasattr(leak_check, "BLOCKED"))
         self.assertNotRegex(source, r"[0-9a-f]{64}")  # no hash list either
         self.assertNotIn("--hash", source)
+
+
+class PublicTextTest(unittest.TestCase):
+    """`--text` and `--refs`: text that becomes public outside git, and branch or tag names."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def run_guard(self, argv, stdin=""):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = leak_check.main(argv, words=WORDS, stdin=io.StringIO(stdin))
+        return code, out.getvalue()
+
+    def test_text_mode_flags_a_blocked_word_in_a_pr_body_and_prints_only_the_rule(self):
+        body = self.dir / "body.md"
+        body.write_text(f"## Summary\nfine\nWorks with {WORD} now.\nMail {PRIVATE_EMAIL}.\n")
+        code, out = self.run_guard(["--text", str(body)])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), ["body.md:3: blocked-word", "body.md:4: email"])
+        self.assertNotIn(WORD, out.lower())
+
+    def test_text_mode_passes_clean_text_and_reads_stdin(self):
+        clean = self.dir / "ok.md"
+        clean.write_text("Plain text.\n")
+        self.assertEqual(self.run_guard(["--text", str(clean)]), (0, ""))
+        code, out = self.run_guard(["--text", "-"], stdin=f"fine\n{WORD}\n")
+        self.assertEqual((code, out), (1, "-:2: blocked-word\n"))
+
+    def test_text_mode_redacts_a_path_that_trips_a_rule(self):
+        path = self.dir / f"{WORD}.md"
+        path.write_text(f"{SHORT_ID}\n")
+        code, out = self.run_guard(["--text", str(path)])
+        self.assertEqual((code, out), (1, "***:0: blocked-word\n***:1: ocellio-id\n"))
+
+    def test_refs_mode_flags_a_blocked_branch_name(self):
+        code, out = self.run_guard(["--refs", f"feat/{WORD}-fix", "feat/clean"])
+        self.assertEqual((code, out), (1, "ref: blocked-word\n"))
+        self.assertEqual(self.run_guard(["--refs", "feat/clean", "v1.0.0"]), (0, ""))
+
+    def test_text_and_refs_fail_closed_without_the_word_list(self):
+        for argv in (["--text", "-"], ["--refs", "main"]):
+            err = io.StringIO()
+            with redirect_stderr(err), redirect_stdout(io.StringIO()):
+                code = leak_check.main(argv, env={"MOSHI_COCKPIT_BLOCKED_WORDS": str(self.dir / "none")},
+                                       stdin=io.StringIO(""))
+            self.assertEqual((code, err.getvalue()), (2, leak_check.NO_WORDS + "\n"))
+
+
+class PrePushHookTest(unittest.TestCase):
+    HOOK = TOOL.parent / "hooks" / "pre-push"
+
+    def push(self, local: str, remote: str):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        words = Path(tmp.name) / "words.txt"
+        words.write_text(f"{WORD}\n")
+        env = dict(os.environ, MOSHI_COCKPIT_BLOCKED_WORDS=str(words))
+        line = f"{local} {'a' * 40} {remote} {'0' * 40}\n"
+        return subprocess.run(["sh", str(self.HOOK), "origin", "url"], input=line, env=env,
+                              capture_output=True, text=True, cwd=TOOL.parent.parent)
+
+    def test_pre_push_refuses_a_branch_with_a_blocked_name(self):
+        for local, remote in ((f"refs/heads/{WORD}-x", "refs/heads/ok"), ("refs/heads/ok", f"refs/tags/{WORD}")):
+            with self.subTest(local=local.split("/")[-1][:4]):
+                done = self.push(local, remote)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn("ref: blocked-word", done.stdout)
+                self.assertNotIn(WORD, done.stdout + done.stderr)
+                self.assertNotIn("== ", done.stdout)  # refused before the full check ran
 
 
 if __name__ == "__main__":

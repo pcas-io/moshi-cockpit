@@ -1,4 +1,20 @@
 #!/bin/sh
 # Runs every local check before a push. Enable once per clone: git config core.hooksPath tools/hooks
+# Git passes one `<local ref> <local sha> <remote ref> <remote sha>` line per ref on stdin; the names of
+# those branches and tags become public, so they go through the leak guard before the full check.
 set -eu
-exec sh "$(git rev-parse --show-toplevel)/tools/check.sh"
+top="$(git rev-parse --show-toplevel)"
+
+refs=""
+while read -r local_ref _ remote_ref _; do
+  for ref in "$local_ref" "$remote_ref"; do
+    case "$ref" in
+      "" | "(delete)") ;;
+      *) ref="${ref#refs/heads/}"; refs="$refs ${ref#refs/tags/}" ;;
+    esac
+  done
+done
+# shellcheck disable=SC2086  # ref names hold no whitespace; splitting is intended
+[ -z "$refs" ] || python3 "$top/tools/leak_check.py" --refs $refs
+
+exec sh "$top/tools/check.sh"

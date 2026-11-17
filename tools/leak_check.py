@@ -3,9 +3,11 @@
 
     python3 tools/leak_check.py                    scan every tracked or new (not ignored) file and its path
     python3 tools/leak_check.py --commits RANGE    scan author, committer and message of each commit in RANGE
+    python3 tools/leak_check.py --text FILE...     scan text that becomes public outside git (`-` = stdin)
+    python3 tools/leak_check.py --refs REF...      scan branch and tag names
 
-A finding prints `path:line: <rule>` (line 0 is the path itself) and the exit code is 1. The matched text is
-never printed; path parts that trip a rule are shown as `***`.
+A finding prints `path:line: <rule>` (line 0 is the path itself; `ref: <rule>` for a ref name) and the exit
+code is 1. The matched text is never printed; path parts that trip a rule are shown as `***`.
 
 The blocked words are private and never part of the repo, not even as hashes (short words fall to a
 dictionary). They are read from the file in $MOSHI_COCKPIT_BLOCKED_WORDS, by default
@@ -21,7 +23,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Iterable, List, Mapping, Optional
+from typing import Callable, IO, Iterable, List, Mapping, Optional
 
 WORDS_ENV = "MOSHI_COCKPIT_BLOCKED_WORDS"
 DEFAULT_WORDS = Path(".config") / "moshi-cockpit-dev" / "blocked-words.txt"
@@ -131,16 +133,49 @@ def scan_commits(root: Path, revisions: str, words: frozenset, git: Git) -> List
     return findings
 
 
+def scan_text(names: List[str], words: frozenset, stdin: IO[str]) -> List[str]:
+    """Every rule on every line of each file (`-` is stdin), as `name:line: rule`."""
+    findings = []
+    for name in names:
+        try:
+            text = stdin.read() if name == "-" else Path(name).read_text(errors="replace")
+        except OSError:
+            findings.append(f"{shown_path(Path(name).name, words)}:0: unreadable")
+            continue
+        shown = "-" if name == "-" else shown_path(Path(name).name, words)
+        if name != "-":
+            findings += [f"{shown}:0: {rule}" for rule in scan_line(Path(name).name, words)]
+        for number, line in enumerate(text.splitlines(), 1):
+            findings += [f"{shown}:{number}: {rule}" for rule in scan_line(line, words)]
+    return findings
+
+
+def scan_refs(refs: List[str], words: frozenset) -> List[str]:
+    """Branch and tag names: the same rules, reported without the name."""
+    findings = []
+    for ref in refs:
+        name = re.sub(r"^refs/(?:heads|tags)/", "", ref)
+        findings += [f"ref: {rule}" for rule in scan_line(name, words)]
+    return findings
+
+
 def main(argv: Optional[List[str]] = None, words: Optional[frozenset] = None, cwd: Optional[Path] = None,
-         git: Git = run_git, env: Optional[Mapping[str, str]] = None) -> int:
+         git: Git = run_git, env: Optional[Mapping[str, str]] = None, stdin: Optional[IO[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Scan files or commits for internal data.")
     parser.add_argument("--commits", metavar="RANGE", help="scan commit metadata in RANGE instead of files")
+    parser.add_argument("--text", nargs="+", metavar="FILE", help="scan text files (`-` is stdin) instead of the tree")
+    parser.add_argument("--refs", nargs="+", metavar="REF", help="scan branch and tag names instead of the tree")
     args = parser.parse_args(argv)
     if words is None:
         words = load_words(os.environ if env is None else env)
     if not words:
         print(NO_WORDS, file=sys.stderr)
         return 2
+    if args.text or args.refs:
+        findings = scan_text(args.text or [], words, stdin or sys.stdin) + scan_refs(args.refs or [], words)
+        for finding in findings:
+            print(finding)
+        return 1 if findings else 0
     root = Path(cwd) if cwd else Path(run_git(["rev-parse", "--show-toplevel"], Path.cwd()).strip())
     if args.commits:
         findings = scan_commits(root, args.commits, words, git)
