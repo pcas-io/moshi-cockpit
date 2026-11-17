@@ -32,6 +32,6 @@ step "node: mods"
 node --test tests/js/*.test.mjs
 
 step "shellcheck"
-shellcheck install.sh bin/* tools/check.sh tools/hooks/*
+shellcheck install.sh bin/* tools/check.sh tools/release.sh tools/hooks/*
 
 step "all checks passed"

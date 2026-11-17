@@ -1,6 +1,6 @@
 #!/bin/sh
-# moshi-cockpit: Einstieg. Löst den Symlink in ~/.local/bin auf und startet das Python-Paket
-# isoliert (-I: kein PYTHONPATH, kein cwd im Suchpfad).
+# moshi-cockpit: entry point. Resolves the link in ~/.local/bin and starts the Python package isolated
+# (-I: no PYTHONPATH, no cwd on the search path).
 set -eu
 self=$(readlink -f "$0")
 root=$(cd "$(dirname "$self")/.." && pwd)
