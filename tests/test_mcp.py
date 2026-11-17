@@ -1,15 +1,12 @@
+"""The minimal MCP client: SSE and JSON answers, refused tokens, error text, the unauthenticated probe."""
+
 import io
 import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from cockpit import status
-from cockpit.secrets import KeychainError
-from cockpit.secrets.macos import MacKeychain
 from cockpit.mcp import McpClient, McpError, parse_body, probe_unauthenticated
-from cockpit.config import origin
-from tests.helpers import FakeSecurity, configure, temp_paths
 
 TOKEN = "bt_TESTTOKEN_abcdefgh"
 
@@ -78,35 +75,6 @@ class McpTest(unittest.TestCase):
         code, challenge = probe_unauthenticated(self.url)
         self.assertEqual(code, 401)
         self.assertTrue(challenge.startswith("Bearer"))
-
-    def test_status_end_to_end_with_keychain(self):
-        keychain = MacKeychain(FakeSecurity({("moshi-reader", "reader"): TOKEN}))
-        paths = temp_paths(self)
-        configure(paths, servers={}, agents=[{"name": "reader", "harness": "codex", "bound": {"moshi": origin(self.url)}}])
-        identity = status.pick_identity(keychain, None, ["nobody", "reader"])
-        self.assertEqual(identity, "reader")  # the first agent here with a moshi token
-        agents = status.fetch_agents(keychain, identity, self.url, paths,
-                                     client_factory=lambda _url, tok: McpClient(self.url, tok))
-        self.assertIn("vibe", status.render(agents, identity))
-
-    def test_status_says_whose_presence_the_read_refreshes(self):
-        keychain = MacKeychain(FakeSecurity({("moshi-vibe", "vibe"): TOKEN}))
-        identity = status.pick_identity(keychain, None, ["vibe"])
-        self.assertEqual(identity, "vibe")
-        self.assertIn("refreshes the presence of 'vibe'", status.render([], identity))
-        legacy = MacKeychain(FakeSecurity({("moshi-cockpit", "cockpit"): TOKEN}))
-        with self.assertRaises(KeychainError):  # no reading identity of its own any more, only agents
-            status.pick_identity(legacy, None, [])
-
-
-class RenderSafetyTest(unittest.TestCase):
-    def test_control_characters_from_server_are_stripped(self):
-        hostile = {"name": "evil\x1b]0;pwned\x07", "presence": "live", "role": "x\x1b[2J",
-                   "working_on": "line1\r\nline2\x1b]8;;http://phish\x07click\x1b]8;;\x07"}
-        text = status.render([hostile], "reader")
-        self.assertNotIn("\x1b", text)
-        self.assertNotIn("\x07", text)
-        self.assertNotIn("\r", text)
 
 
 class ErrorSanitizingTest(unittest.TestCase):

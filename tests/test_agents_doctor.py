@@ -195,21 +195,19 @@ class DefaultsDoctorTest(unittest.TestCase):
     def test_status_json_is_sanitized_and_compact(self):
         from cockpit import status
         raw = {"inbox_pending": 2, "agents": [{"name": "x\x1b[2J", "presence": "live", "webhook": {"url": "secret"}}]}
-        data = json.loads(status.as_json(raw, "cockpit", [{"name": "a"}], {"moshi": True}))
+        data = json.loads(status.as_json(status.mesh_from(raw), [{"name": "a"}], {"moshi": True}))
         self.assertNotIn("inbox_pending", data)
         self.assertNotIn("\x1b", data["agents"][0]["name"])
         self.assertNotIn("webhook", data["agents"][0])
         self.assertEqual(data["local"], [{"name": "a"}])
         self.assertEqual(data["servers"], {"moshi": True})
 
-    def test_local_agents_carry_name_harness_and_moshi_name(self):
+    def test_local_agents_carry_name_harness_and_role(self):
         from cockpit import config, status
         ctx, _ = registered(self, agents_=[{"name": "research", "harness": "codex", "role": "R"}])
         local = status.local_agents(ctx.paths, config.load_config(ctx.paths), ctx.keychain)
-        self.assertEqual([(a["name"], a["harness"], a["moshi_name"], a["role"]) for a in local],
-                         [("research", "codex", "research", "R")])
-        ctx2, _ = registered(self, servers={}, agents_=[{"name": "solo", "harness": "vibe"}])
-        self.assertEqual(status.local_agents(ctx2.paths, config.load_config(ctx2.paths), ctx2.keychain)[0]["moshi_name"], "")
+        self.assertEqual([(a["name"], a["harness"], a["role"]) for a in local], [("research", "codex", "R")])
+        self.assertNotIn("moshi_name", local[0])  # an agent's moshi name is its name
 
     def test_unknown_mods_reported(self):
         ctx, _ = context(self)

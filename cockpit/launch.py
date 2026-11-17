@@ -4,6 +4,9 @@ One start path for every agent and every harness: the harness builds argv and en
 into the environment only, never argv. For harnesses that ask for it the environment is cleaned first
 (no herdr/hc control, no SSH agent). That is not isolation: the agent still runs as the same user. The
 process is replaced (execve), so herdr sees the agent CLI itself.
+
+Before the start, `claim` makes this installation the agent's active one in moshi: moshi's MCP endpoint
+refuses an agent token whose installation is not the active one, a freshly loaded agent included.
 """
 
 from __future__ import annotations
@@ -13,16 +16,62 @@ import shutil
 import sys
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
+from cockpit import agents_remote, status
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES, Ctx
 from cockpit.harnesses.base import DROPPED_ENV, DROPPED_ENV_PREFIXES, TOKEN_ENV_PREFIXES
+from cockpit.moshi_api import MoshiApi, MoshiError
 from cockpit.secrets import SecretStore
-from cockpit.paths import Paths
+from cockpit.paths import Paths, keychain_service
 from cockpit.registry import find
+from cockpit.tokens import moshi_token
 
 Exec = Callable[[str, List[str], dict], None]
 SHELLS = ("zsh", "bash")
 RUN_MARKER = "MOSHI_COCKPIT_RUN"
+UNREACHABLE = "moshi is not reachable; starting without the mesh."
+DEAD_TOKEN = ("moshi no longer accepts the token of {name} on this Mac. Run moshi-cockpit agent remove {name}, "
+              "then moshi-cockpit agent load {name}.")
+
+
+class ActiveElsewhere(RuntimeError):
+    """Another installation holds the agent and no takeover was asked for (exit code 4)."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__(f"active on {label}")
+        self.label = label
+
+
+def _warn(text: str) -> None:
+    print(text, file=sys.stderr)
+
+
+def claim(paths: Paths, keychain: SecretStore, name: str, take_over: bool = False,
+          api: Optional[MoshiApi] = None, warn: Callable[[str], None] = _warn) -> None:
+    """Makes this installation the agent's active one, silently when nobody or this one holds it. Another
+    installation holds it: ActiveElsewhere, unless `take_over`. Nothing to do without moshi, without the
+    agent's moshi token, or for an older token bound to no installation. moshi unreachable: one warning,
+    the agent starts anyway. Without a usable device key ApprovalRequired; a token moshi refuses: ValueError,
+    so no harness starts only to be refused."""
+    agent = find(paths, name)
+    config = load_config(paths)
+    harness = HARNESSES[agent.harness]
+    if ("moshi" not in harness.servers(Ctx(paths=paths, config=config, keychain=keychain))
+            or not keychain.exists(keychain_service("moshi", agent.name), agent.name)):
+        return
+    url = config.servers["moshi"]
+    api = api or agents_remote.api_for(url)
+    try:
+        holder = status.where(paths, config, keychain, agent.name, api)
+        if holder["active"] and not holder["here"] and not take_over:
+            raise ActiveElsewhere(holder["active"])
+        api.activate(moshi_token(paths, keychain, agent.name, url))
+    except MoshiError as exc:
+        if status.unreachable(exc):
+            warn(UNREACHABLE)
+        elif exc.reason != "legacy_token":
+            raise (ValueError(DEAD_TOKEN.format(name=agent.name)) if exc.status == 401
+                   else agents_remote.refusal(exc, agent.name)) from None
 
 
 def agent_env(base: Mapping[str, str], extra: Dict[str, str], clean: bool) -> Dict[str, str]:

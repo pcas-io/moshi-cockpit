@@ -1,4 +1,5 @@
-"""Minimal MCP client over Streamable HTTP (stdlib only). Used for status, the agent-test restore and endpoint checks."""
+"""Minimal MCP client over Streamable HTTP (stdlib only). The doctor probes endpoints with it; status reads
+moshi through its device API instead, which changes no agent's presence."""
 
 from __future__ import annotations
 

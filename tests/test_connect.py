@@ -408,7 +408,7 @@ class CommandLineTest(unittest.TestCase):
         configure(self.ctx.paths)
 
     def status(self):
-        args = mock.Mock(identity=None, json=True)
+        args = mock.Mock(json=True)
         with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), mock.patch("builtins.print") as printed:
             code = cli.cmd_status(args, self.ctx.paths)
         return code, json.loads(printed.call_args.args[0])
@@ -417,7 +417,6 @@ class CommandLineTest(unittest.TestCase):
         code, data = self.status()
         self.assertEqual(code, 0)
         self.assertIs(data["needs_connect"], True)
-        self.assertEqual(data["identity"], "")
         self.assertEqual(data["agents"], [])
 
     def test_after_connect_without_agents_the_panel_gets_the_local_view(self):
@@ -426,12 +425,13 @@ class CommandLineTest(unittest.TestCase):
         code, data = self.status()
         self.assertEqual(code, 0)
         self.assertIs(data["needs_connect"], False)
-        self.assertEqual(data["identity"], "")
+        self.assertIs(data["approval_valid"], False)  # no register_expires_at written in this test
         self.assertEqual(data["agents"], [])
         self.assertEqual(data["servers"], {"moshi": True, "ocellio": True})
 
     def test_the_payload_defaults_to_connected(self):
-        self.assertIs(json.loads(status.as_json({}, "x"))["needs_connect"], False)
+        data = json.loads(status.as_json(status.Mesh()))
+        self.assertEqual((data["needs_connect"], data["disconnected"], data["unreachable"]), (False, False, False))
 
     def run_connect(self, result=0, error=None, tty=False):
         run = mock.Mock(return_value=result, side_effect=error)
@@ -487,11 +487,12 @@ class CommandLineTest(unittest.TestCase):
         _, _, held, _ = self.run_connect()
         held.assert_not_called()
 
-    def test_the_text_status_still_names_the_missing_token(self):
-        args = mock.Mock(identity=None, json=False)
-        with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), self.assertRaises(KeychainError) as caught:
-            cli.cmd_status(args, self.ctx.paths)
-        self.assertIn("moshi token", str(caught.exception))
+    def test_the_text_status_before_connect_names_the_way(self):
+        args = mock.Mock(json=False)
+        with mock.patch.object(cli, "default_store", return_value=self.ctx.keychain), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cli.cmd_status(args, self.ctx.paths), 0)
+        self.assertIn("run moshi-cockpit connect", " ".join(str(c.args[0]) for c in printed.call_args_list))
 
 
 if __name__ == "__main__":
