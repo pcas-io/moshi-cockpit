@@ -8,7 +8,7 @@ import sys
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, harness_install, installer, launch, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, installer, launch, legacy, registry, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -51,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     stat.add_argument("--json", action="store_true", help="compact JSON (for the sidebar in Herdr)")
 
     sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
+    sub.add_parser("migrate", help="move the agents of an earlier setup to this installation (after connect)")
 
     agt = sub.add_parser("agent", help="manage agents (name, harness, role)")
     agt_sub = agt.add_subparsers(dest="agent_command", required=True)
@@ -193,6 +194,13 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
     return code
 
 
+def cmd_migrate(args: argparse.Namespace, paths: Paths) -> int:
+    ctx = _context(paths)
+    for note in legacy.migrate(ctx, agents_remote.api_for(require(load_config(paths), "moshi"))):
+        print(note if note == legacy.REVOKE_HINT else f"• {note}")
+    return 0
+
+
 def cmd_agent(args: argparse.Namespace, paths: Paths) -> int:
     ctx = _context(paths)
     handler = {"set": _agent_set, "list": _agent_list, "remove": _agent_remove, "load": _agent_load,
@@ -324,7 +332,7 @@ def cmd_harness(args: argparse.Namespace, paths: Paths) -> int:
 
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
             "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect,
-            "harness": cmd_harness}
+            "harness": cmd_harness, "migrate": cmd_migrate}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
