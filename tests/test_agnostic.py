@@ -440,7 +440,7 @@ class OwnRulesTest(unittest.TestCase):  # the person's data rule must persist
 
 class MoshiNameTest(unittest.TestCase):
     def test_an_agents_moshi_name_equals_its_local_name(self):
-        from cockpit import status
+        from cockpit import cli
         from cockpit.harnesses import HARNESSES, Ctx
         ctx, _ = context(self)
         configure(ctx.paths, agents=[{"name": "research", "harness": "codex"}])
@@ -448,7 +448,10 @@ class MoshiNameTest(unittest.TestCase):
         agent = registry.find(ctx.paths, "research")
         self.assertEqual(HARNESSES["codex"].moshi_name(Ctx(paths=ctx.paths, config=cfg, keychain=ctx.keychain), agent),
                          "research")
-        self.assertEqual(status.local_agents(ctx.paths, cfg, ctx.keychain)[0]["moshi_name"], "research")
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), \
+                mock.patch("cockpit.cli.default_store", return_value=ctx.keychain), mock.patch("builtins.print") as printed:
+            cli.main(["agent", "list", "--json"])
+        self.assertEqual(json.loads(printed.call_args.args[0])["agents"][0]["moshi_name"], "research")  # the panel's
 
     def test_the_config_has_no_person(self):
         ctx, _ = context(self)

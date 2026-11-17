@@ -25,6 +25,8 @@ from cockpit.text import clean
 # flow); both are accepted and change nothing: with moshi set up, add always creates the agent there.
 PANEL_FLAG = "accepted for the Herdr panel; changes nothing"
 APPROVAL_EXIT = 3  # shared with the mods: the panel opens the connect dialog
+ACTIVE_ELSEWHERE_EXIT = 4  # shared with the mods: stdout {"active": label}, the panel offers a takeover
+TAKE_OVER = "--take-over"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("uninstall", help="restore every change from the backups")
 
     run = sub.add_parser("run", help="start an agent (harness, approvals, tokens; used by the menu and the sidebar)")
+    run.add_argument(TAKE_OVER, action="store_true",
+                     help="start here even when another installation holds the agent (also right after the name)")
     run.add_argument("agent")
     run.add_argument("rest", nargs=argparse.REMAINDER)
 
@@ -46,8 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     doc.add_argument("--json", action="store_true")
     doc.add_argument("--quiet", action="store_true", help="silent unless there is an error: then one sentence with one action")
 
-    stat = sub.add_parser("status", help="moshi mesh overview")
-    stat.add_argument("--as", dest="identity", help="agent whose moshi token reads the mesh (default: the first one here)")
+    stat = sub.add_parser("status", help="moshi mesh overview (read with this Herdr's device key)")
     stat.add_argument("--json", action="store_true", help="compact JSON (for the sidebar in Herdr)")
 
     sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
@@ -64,6 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
     agt_load.add_argument("name")
     agt_cat = agt_sub.add_parser("catalog", help="moshi's agents that are not on this Mac yet")
     agt_cat.add_argument("--json", action="store_true")
+    agt_where = agt_sub.add_parser("where", help="the installation an agent is active on")
+    agt_where.add_argument("name")
+    agt_where.add_argument("--json", action="store_true")
     agt_set = agt_sub.add_parser("set", help="change an agent's role or skill (here and in moshi)")
     agt_set.add_argument("name")
     agt_set.add_argument("--role", help="new role; empty deletes it")
@@ -94,7 +100,19 @@ def _context(paths: Paths) -> AgentContext:
 
 
 def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
-    launch.run_agent(paths, default_store(), args.agent, args.rest)
+    """`run <agent> [--take-over] [args…]`: the flag right after the name is ours, everything later the harness's."""
+    rest, take_over = list(args.rest), args.take_over
+    if rest[:1] == [TAKE_OVER]:
+        rest, take_over = rest[1:], True
+    keychain = default_store()
+    try:
+        launch.claim(paths, keychain, args.agent, take_over)
+    except launch.ActiveElsewhere as exc:
+        print(json.dumps({"active": exc.label}, ensure_ascii=False))  # stdout stays JSON for the panel
+        print(f"{args.agent} is active on {exc.label}. To start it here: moshi-cockpit run {args.agent} {TAKE_OVER}",
+              file=sys.stderr)
+        return ACTIVE_ELSEWHERE_EXIT
+    launch.run_agent(paths, keychain, args.agent, rest)
     return 0  # not reached: exec
 
 
@@ -134,29 +152,21 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
     keychain = default_store()
     config = load_config(paths)
     local = status.local_agents(paths, config, keychain)
-    result, identity = {}, ""
+    mesh = status.read_mesh(paths, config, keychain)
     unconnected = connect.needs_connect(paths, config, keychain)
-    if config.has("moshi") and not (args.json and unconnected):  # the panel then offers to connect, it gets no error
-        try:
-            identity = status.pick_identity(keychain, args.identity, [a["name"] for a in local])
-        except KeychainError:
-            if not args.json:
-                raise
-            # Connected, but no agent here holds a moshi token yet: the panel gets the local view, not an error.
-        if identity:
-            result = status.fetch_status(keychain, identity, config.server("moshi"), paths)
     if args.json:
-        print(status.as_json(result, identity, local, {name: config.has(name) for name in SERVERS},
-                             wizard.harness_offer(paths), status.problems(paths), unconnected))
-    elif config.has("moshi"):
-        print(status.render(list(result.get("agents") or []), identity))
+        print(status.as_json(mesh, local, {name: config.has(name) for name in SERVERS}, wizard.harness_offer(paths),
+                             status.problems(paths), unconnected, connect.approval_valid(paths, keychain)))
+        return 0
+    if config.has("moshi") and not unconnected:
+        print(status.render(mesh))
     else:
         for a in local:
             print(f"{a['name']:<20}{a['harness']:<10}{a['role']}")
-        print(f"{len(local)} agent(s) · moshi not set up")
-    if not args.json:
-        for problem in status.problems(paths):
-            print(f"Note: {problem}")
+        print(f"{len(local)} agent(s) · " + ("not connected to moshi: run moshi-cockpit connect" if unconnected
+                                             else "moshi not set up"))
+    for problem in status.problems(paths):
+        print(f"Note: {problem}")
     return 0
 
 
@@ -186,7 +196,7 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
 def cmd_agent(args: argparse.Namespace, paths: Paths) -> int:
     ctx = _context(paths)
     handler = {"set": _agent_set, "list": _agent_list, "remove": _agent_remove, "load": _agent_load,
-               "catalog": _agent_catalog}.get(args.agent_command, _agent_add)
+               "catalog": _agent_catalog, "where": _agent_where}.get(args.agent_command, _agent_add)
     return handler(ctx, args)
 
 
@@ -223,6 +233,17 @@ def _agent_catalog(ctx: AgentContext, args: argparse.Namespace) -> int:
     return 0
 
 
+def _agent_where(ctx: AgentContext, args: argparse.Namespace) -> int:
+    holder = status.where(ctx.paths, load_config(ctx.paths), ctx.keychain, registry.validate_name(args.name))
+    if args.json:
+        print(json.dumps(holder, ensure_ascii=False))
+    elif holder["here"]:
+        print(f"{args.name} is active on this Herdr ({holder['active']})")
+    else:
+        print(f"{args.name} is active on {holder['active']}" if holder["active"] else f"{args.name} is active nowhere")
+    return 0
+
+
 def _agent_set(ctx: AgentContext, args: argparse.Namespace) -> int:
     changed, warnings = agents_remote.set_profile(ctx, args.name, args.role, args.skill)
     print(f"• {changed.name} updated")
@@ -242,7 +263,10 @@ def _agent_list(ctx: AgentContext, args: argparse.Namespace) -> int:
     found = load_agents(paths, enforce=False)
     if args.json:
         config = load_config(paths)
-        print(json.dumps({"agents": status.local_agents(paths, config, ctx.keychain),
+        # The panel still shows an agent's moshi name, which is its name, until the mods follow.
+        agents = [dict(a, moshi_name=a["name"] if config.has("moshi") else "")
+                  for a in status.local_agents(paths, config, ctx.keychain)]
+        print(json.dumps({"agents": agents,
                           "harnesses": wizard.harness_offer(paths),
                           "servers": {name: config.has(name) for name in SERVERS}}, ensure_ascii=False))
         return 0
