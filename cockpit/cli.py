@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, harness_install, installer, launch, legacy, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, installer, launch, legacy, machines, registry, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -87,6 +87,17 @@ def build_parser() -> argparse.ArgumentParser:
     har_sub = har.add_subparsers(dest="harness_command", required=True)
     har_inst = har_sub.add_parser("install", help="ask, then run the vendor's installer")
     har_inst.add_argument("name", choices=sorted(harness_install.INSTALL))
+
+    mac = sub.add_parser("machine", help="the machines Herdr reaches over ssh and the agent CLIs on each")
+    mac_sub = mac.add_subparsers(dest="machine_command", required=True)
+    mac_list = mac_sub.add_parser("list", help="Herdr's machines and the ssh hosts not added yet")
+    mac_list.add_argument("--json", action="store_true")
+    mac_inv = mac_sub.add_parser("inventory", help="which agent CLIs a machine has and whether each is signed in")
+    mac_inv.add_argument("--on", metavar="NAME", help="a machine from `machine list` (default: this Mac)")
+    mac_inv.add_argument("--refresh", action="store_true", help="check again, even within a minute of the last check")
+    mac_inv.add_argument("--json", action="store_true")
+    mac_add = mac_sub.add_parser("add", help="add an ssh host to Herdr (hc machine add), then show its agent CLIs")
+    mac_add.add_argument("alias", help="a Host from ~/.ssh/config or user@host")
 
     ses = sub.add_parser("sessions", help="an agent's sessions that can be resumed (for the session picker)")
     ses.add_argument("agent", nargs="?", help="name of an agent; without it --harness")
@@ -382,9 +393,50 @@ def cmd_harness(args: argparse.Namespace, paths: Paths) -> int:
     return code
 
 
+def cmd_machine(args: argparse.Namespace, paths: Paths) -> int:
+    if args.machine_command == "list":
+        found = machines.list_machines(paths, machines.run_capture)
+        if args.json:
+            print(json.dumps(found, ensure_ascii=False))
+            return 0
+        for m in found["machines"]:
+            print(f"{clean(m['name'], '?', limit=40):<24}{clean(m['state'], '?', limit=20):<14}{clean(m['target'], '', limit=80)}")
+        if found["ssh_hosts"]:
+            print("Not added yet (from ~/.ssh/config): " + ", ".join(clean(h, "?", limit=80) for h in found["ssh_hosts"]))
+        if found.get("problem"):
+            print(f"Note: {found['problem']}")
+        return 0
+    if args.machine_command == "inventory":
+        result = machines.inventory(paths, machines.check_target(args.on) if args.on else None, machines.run_capture,
+                                    refresh=args.refresh)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        print(f"{args.on or machines.THIS_MAC}, checked {result['checked_at']}" + (" (cached)" if result["cached"] else ""))
+        for row in result["harnesses"]:
+            print(f"{row['label']:<14}{row['state_text']}")
+        return 0
+    return _machine_add(args, paths)
+
+
+def _machine_add(args: argparse.Namespace, paths: Paths) -> int:
+    """Runs in a tab of its own: hc's prompts appear in it, and on a terminal the outcome waits for Enter."""
+    interactive = _on_terminal()
+    try:
+        code = machines.add_machine(paths, args.alias, harness_install.run_argv, machines.run_capture)
+        code = 1 if code else 0  # hc's own message is on screen; our exit codes stay 0/1/3/4
+    except FAILURES as exc:
+        if not interactive:
+            raise
+        code = report(exc)
+    if interactive:
+        _hold_tab()
+    return code
+
+
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
             "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect,
-            "harness": cmd_harness, "migrate": cmd_migrate}
+            "harness": cmd_harness, "migrate": cmd_migrate, "machine": cmd_machine}
 
 
 # What a command ends with on a known failure: one line on stderr and an exit code, never a traceback.

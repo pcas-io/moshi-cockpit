@@ -1,8 +1,9 @@
 """`moshi-cockpit harness install <name>`: install a missing agent CLI with the vendor's own installer.
 
 Nothing runs without a typed yes, and the exact command is shown first. The commands are the vendors'
-documented macOS installers (checked 2026-11-17); each is the vendor's own pipe-to-shell line, run as
-`/bin/sh -c` exactly as published. Never add a command here that a vendor does not document.
+documented macOS installers (checked 2026-11-17, opencode 2026-11-18); each is the vendor's own
+pipe-to-shell line, run as `/bin/sh -c` exactly as published. Never add a command here that a vendor
+does not document.
 """
 
 from __future__ import annotations
@@ -12,8 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
-from cockpit.harnesses import HARNESSES
-from cockpit.harnesses.base import Harness
+from cockpit.inventory import KNOWN, installed_here
 from cockpit.paths import Paths
 
 
@@ -44,6 +44,10 @@ INSTALL: Dict[str, InstallSpec] = {
     # source_url (checked 2026-11-17): https://docs.x.ai/build/overview
     "grok": InstallSpec(_script("curl -fsSL https://x.ai/cli/install.sh | bash"),
                         "https://docs.x.ai/build/overview", ("curl",)),
+    # source_url (checked 2026-11-18): https://opencode.ai/docs (install section; the script installs
+    # `opencode` into ~/.opencode/bin, no sudo)
+    "opencode": InstallSpec(_script("curl -fsSL https://opencode.ai/v2/install | bash"),
+                            "https://opencode.ai/docs", ("curl",)),
 }
 
 Runner = Callable[[Sequence[str]], int]
@@ -71,14 +75,13 @@ def run_argv(argv: Sequence[str]) -> int:
         return 127
 
 
-def install(harness: Harness, io: InstallIO, runner: Runner, paths: Paths,
+def install(name: str, io: InstallIO, runner: Runner, paths: Paths,
             which: Callable[[str], object] = shutil.which) -> int:
-    name = harness.name
     spec = INSTALL.get(name)
     if spec is None:
         io.say(f"No installer is known for {name}.")
         return 1
-    if harness.installed(paths):
+    if installed_here(name, paths):
         io.say(f"{name} is already installed.")
         return 0
     if not spec.argv:
@@ -100,7 +103,7 @@ def install(harness: Harness, io: InstallIO, runner: Runner, paths: Paths,
         io.say("Cancelled, nothing was installed.")
         return 1
     code = runner(spec.argv)
-    if not harness.installed(paths):
+    if not installed_here(name, paths):
         reason = f"the installer exited with code {code}" if code else "the installer finished, but the binary is not on your PATH yet"
         io.say(f"{name} is not installed: {reason}. Open a new terminal and retry, or follow {spec.source_url}")
         return 1
@@ -109,7 +112,6 @@ def install(harness: Harness, io: InstallIO, runner: Runner, paths: Paths,
 
 
 def run_cli(name: str, paths: Paths, io: Optional[InstallIO] = None) -> int:
-    harness = HARNESSES.get(name)
-    if harness is None:
-        raise ValueError(f"Unknown harness '{name}' (known: {', '.join(HARNESSES)})")
-    return install(harness, io or InstallIO(), run_argv, paths)
+    if name not in INSTALL:
+        raise ValueError(f"Unknown harness '{name}' (known: {', '.join(KNOWN)})")
+    return install(name, io or InstallIO(), run_argv, paths)

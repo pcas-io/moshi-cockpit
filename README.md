@@ -12,6 +12,9 @@ What you get inside [Herdr](https://herdr.dev):
 - a "cockpit" layout with a sidebar list of your agents and their presence,
 - a "+ Agent" dialog to create an agent, load one that exists in moshi, or install a missing agent CLI,
 - takeover between installations: an agent is active on one installation at a time,
+- a "Machines" tab that shows which agent CLIs are installed and signed in on this Mac and on the machines
+  Herdr reaches over ssh, and installs or signs in from there,
+- a spaces list for the cockpit layout with a filter, pinned spaces and named groups,
 - the `moshi-cockpit` command line tool behind all of it, usable on its own.
 
 See [docs/security.md](docs/security.md) for what is stored where and what the cockpit does not protect
@@ -68,7 +71,8 @@ creating or loading an agent reopens the same dialog; the installation and the a
 
 ## Add an agent
 
-"+ Agent" (in the "+" menu as "New agent…", or in the agents dialog) has two tabs:
+"+ Agent" (in the "+" menu as "New agent…", or in the agents dialog) has three tabs, **New**, **From moshi**
+and **Machines** (see [Machines](#machines)):
 
 - **New:** a name (letters, digits, `_` and `-`), a harness, and optionally a role and an ocellio skill the
   agent loads at its start. Harnesses are `claude`, `codex`, `vibe` and `agy`; `grok` connects through your
@@ -83,8 +87,59 @@ creating or loading an agent reopens the same dialog; the installation and the a
 
 Start an agent from the sidebar or the menu; the session picker lets you resume an earlier session.
 
+**Where** (top of New) chooses this Mac or one of Herdr's machines whose layout Herdr has read. On another
+machine the dialog lists the six harnesses from that machine's inventory. Start opens a new space on that
+machine running the harness; a harness that is installed but not signed in can be started, its first start
+signs in. Missing ones point to the Machines tab. Nothing is created in moshi or in `agents.json` for it: no
+moshi runs on those machines in this release, and "Your agents" stays the moshi agents on this Mac.
+
 Each agent's Vibe profile (`config.toml`) is written by the cockpit: hand edits to it are replaced on the next
 `install` and whenever the agent's setup is written again.
+
+## Machines
+
+The "+" menu has a row **Machine…** (below "Manage agents…"); it opens "+ Agent" on the **Machines** tab. The
+tab lists this Mac and each machine of Herdr's machine list, and for each of them the six harnesses `claude`,
+`codex`, `vibe`, `agy`, `grok` and `opencode` in one of three states:
+
+- **Ready:** found, and signed in.
+- **Installed, not signed in:** found, and not signed in or not known to be (not every vendor offers a way to
+  tell, so unknown counts here).
+- **Missing:** not found.
+
+A row has one button where one applies:
+
+- **Install** (Missing). On this Mac it runs `moshi-cockpit harness install`, which asks y/N in its tab. On
+  another machine the dialog shows the vendor's command first and runs it only after you confirm, in a new
+  tab on that machine, as your SSH login user, into your home directory, never with `sudo`. A machine without
+  `curl` shows a note instead of the button.
+- **Sign in** (Installed, not signed in). Opens a tab on that machine with the vendor's login command:
+  `claude auth login`, `codex login --device-auth`, `vibe --setup`, `agy` (its first start signs in),
+  `grok login --device-auth` or `opencode auth login`.
+
+Under the machines, "From ~/.ssh/config" lists the hosts Herdr does not know yet. **Add** runs
+`moshi-cockpit machine add` in a tab, where the host key, password or 2FA prompts of `hc machine add` appear,
+and then prints the six states of the new machine.
+
+The inventory is asked when the tab opens (a machine checked less than a minute ago is shown from the cache),
+after `machine add`, and when you press **Refresh** on a machine. Nothing polls. A machine that does not answer
+shows one error line and keeps its last good result in the cache. Machines that are not connected are listed
+and checked the next time the Machines tab opens after they are; nothing re-checks them on its own.
+
+## Spaces
+
+In the cockpit layout, Herdr's spaces list is replaced by `mesh-spaces`, a copy of it with these additions:
+
+- a **Filter spaces** field above the list: case-insensitive match on a space's name, folder, branch or
+  machine;
+- **pinned** spaces first, then your **groups**, then the rest; a group can be folded;
+- a right-click menu on a space: **Pin** or **Unpin**, **Move to** a group of the same machine, **New group…**
+  (asks for a name), **Remove from** its group, and **More…** for Herdr's own space menu.
+
+Pins and groups are kept per machine in Herdr's shared store. A pinned space is in no group; a worktree goes
+where its checkout goes. When a space is gone its entry is dropped, but not while its machine is offline.
+The `main` layout and Herdr's own spaces mod stay as they are; switch to `main` for Herdr's plain list.
+`moshi-cockpit doctor` warns when Herdr has changed the spaces mod this copy was made from.
 
 ## Takeover between installations
 
@@ -121,7 +176,10 @@ and activation is skipped.
 | `agent remove NAME` | Remove an agent from this Mac. It stays in moshi, and this installation's token for it ends. |
 | `rules show` | Show your own rules for every agent. |
 | `rules set [--text TEXT]` | Set your own rules (from stdin without `--text`; empty removes them) and set the agents up again. `install` never overwrites them. |
-| `harness install NAME` | Install a missing agent CLI (`claude`, `codex`, `vibe`, `agy`, `grok`) with the vendor's official installer, after showing the command and asking. |
+| `harness install NAME` | Install a missing agent CLI (`claude`, `codex`, `vibe`, `agy`, `grok`, `opencode`) on this Mac with the vendor's official installer, after showing the command and asking. |
+| `machine list [--json]` | Herdr's machines (name, state, target) and the hosts in `~/.ssh/config` that Herdr does not know yet. |
+| `machine inventory [--on NAME] [--refresh] [--json]` | The six agent CLIs on this Mac, or on the machine `NAME` from `machine list`, each Ready, Installed, not signed in, or Missing. A result younger than a minute comes from the cache; `--refresh` asks again. |
+| `machine add ALIAS` | Add an ssh host (a `Host` from `~/.ssh/config` or `user@host`) to Herdr with `hc machine add`, attached to your terminal, then show its inventory. |
 | `sessions [AGENT] [--harness H] [--folder DIR] [--limit N] [--json]` | An agent's sessions that can be resumed. Give either an agent or `--harness`. `--limit` defaults to 8. |
 
 ### Exit codes

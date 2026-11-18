@@ -13,7 +13,7 @@ this repository; if the two ever disagree, the code is right and this file is a 
 | Keychain, `ocellio-default` / `default` | Your ocellio token, if you use ocellio. |
 | Keychain, `ocellio-<agent>` / `<agent>` | A copy of it for each agent. |
 | `~/.config/moshi-cockpit/` | `config.json` (server addresses, which server each token is bound to, the registration token's expiry), `agents.json` (your agents), `rules.md` (your own rules). Files holding settings are written owner-only. |
-| `~/.local/state/moshi-cockpit/` | `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
+| `~/.local/state/moshi-cockpit/` | `inventory.json`, the machine inventory cache (see Machines); `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); `inventory.lock`, the lock that keeps two inventory runs from writing the cache at once; a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
 | `~/.local/share/moshi-cockpit/` | The installed release, the pinned Python runtime, and per agent the files its harness needs (a Vibe profile, say). |
 | `~/.gemini/config/mcp_config.json` | Only with an agy agent: its moshi and ocellio tokens, in plain text, mode 0600 (see below). |
 
@@ -84,6 +84,40 @@ its vendor first.
 command is fixed in the code per harness, printed in full before anything runs, and runs only after you type
 yes. The cockpit adds no installer a vendor does not publish.
 
+## Machines and agent CLIs
+
+`moshi-cockpit machine ...` and the Machines tab look at the machines Herdr reaches over ssh.
+
+- **ssh config.** `~/.ssh/config` and the files it includes are only read, to list hosts Herdr does not know
+  yet. The cockpit never writes them. `machine add` hands the host to `hc machine add`, attached to your
+  terminal, so host key checks, passwords and 2FA are answered there and never pass through the cockpit.
+- **Names.** A machine name or ssh alias reaches `hc` only if it starts with a letter or digit and holds
+  letters, digits and `. _ @ : -`; anything else is refused before a process starts.
+- **Inventory.** One fixed shell script is run on the machine (through `hc exec` for a remote one). Nothing
+  is put into it. For each of the six agent CLIs it tests that the program exists and whether it is signed
+  in, by an exit code (`claude auth status`, `codex login status`) or by whether a file exists (Vibe's
+  `.env`, Grok's `auth.json`; for `claude` its `.credentials.json`, only when `claude auth status` cannot
+  answer, that is exits with neither 0 nor 1). Where a vendor offers neither (`agy`, `opencode`) the state is unknown and
+  shown as "Installed, not signed in". Output of the vendor commands is discarded; no credential file is
+  read, and no token is in an argument list, the cache or a log.
+- **Cache.** `~/.local/state/moshi-cockpit/inventory.json` (mode 0600) holds per machine the time, whether
+  `curl` exists and the three states. It is used for at most a minute per machine; a failed check never
+  replaces it. The inventory is asked only when the Machines tab opens, after `machine add` and on Refresh;
+  nothing polls.
+- **Installs on a remote machine.** The vendor's own one-liner (the same fixed commands as `harness install`)
+  runs on the machine as the SSH login user, into that user's home directory, in a tab you can see, after you
+  confirm the command in the dialog. The cockpit never uses `sudo`. As with the local installers, the
+  command is the vendor's pipe-to-shell command and you trust the vendor for it. Signing in runs the
+  vendor's login command in a visible tab; you complete it there.
+- **Remote machines and moshi.** This release puts no moshi identity, token or agent on a remote machine.
+  A harness started there through "Where" runs without moshi.
+
+## Pins and groups
+
+The cockpit layout's spaces list keeps pins and groups in Herdr's shared store (space ids and your group
+names, per machine), not in this repository, the Keychain or a cockpit file. Any Herdr mod can read that
+store.
+
 ## Leak guard
 
 Because the repository is public, `tools/leak_check.py` blocks internal identifiers, private email addresses,
@@ -102,7 +136,7 @@ pre-push hook and `tools/check.sh` run it, and without the list it fails closed.
 - Herdr mods run with full rights in your Herdr window. The cockpit ships its own and `doctor` warns about any
   mod it does not know, but it cannot vouch for mods you add.
 - Herdr updates itself. A new version it was not tested with only produces a `doctor` warning.
-- The vendor installers behind `harness install` are the vendors' own pipe-to-shell commands; you trust them
+- The vendor installers behind `harness install` and the Install button of the Machines tab are the vendors' own pipe-to-shell commands; you trust them
   the way you would if you ran them by hand.
 - The leak guard only knows the words on your private list.
 

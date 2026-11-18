@@ -1,11 +1,13 @@
-// The "+" menu of the cockpit layout: herdr's new-menu (Apache-2.0) with the harnesses, plus "New agent…" and
-// "Manage agents…". A harness opens its session list, where its own agents are too (an own agent starts there,
-// after the takeover check of mesh-agents/start.js). moshi-cockpit generates the entries of the own agents into
-// programs.json with this prefix; this menu leaves them out, so no own agent starts here without that check.
+// The "+" menu of the cockpit layout: herdr's new-menu (Apache-2.0) with the harnesses, plus "New agent…",
+// "Manage agents…" and "Machine…" (the Machines tab of "+ Agent"). A harness opens its session list, where its
+// own agents are too (an own agent starts there, after the takeover check of mesh-agents/start.js). moshi-cockpit
+// generates the entries of the own agents into programs.json with this prefix; this menu leaves them out, so no
+// own agent starts here without that check.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, panes, knownAgents, run, openOverlay, closeOverlay, props, window, keys, shared, setShared, home } from "herdr";
 
+// The last agents each machine reported, shown at once while knownAgents() checks again.
 const KNOWN = "new-menu.agents";
 const OWN = "moshi-cockpit-";
 // herdr's standard entries whose sessions can be listed and resumed (moshi-cockpit sessions --harness).
@@ -83,10 +85,10 @@ export default class MeshNewMenu extends View {
     const space = spaces().find(s => s.active);
     const standard = this.agents.filter(a => !a.key.startsWith(OWN));
     const installed = standard.filter(a => a.installed);
-    const choices = [...installed, ...standard.filter(a => !a.installed).slice(0, 2)];
+    const choices = this.failed ? installed : [...installed, ...standard.filter(a => !a.installed).slice(0, 2)];
     const numbered = installed;
-    const rows = Math.max(1, choices.length);
-    return v_flex().min_h(0).w_full().h(Math.min(620, 260 + rows * 31)).bg(t.popover).p(5).text_size(12.8)
+    const rows = Math.max(1, choices.length + (this.failed ? 1 : 0));
+    return v_flex().min_h(0).w_full().h(Math.min(620, 291 + rows * 31)).bg(t.popover).p(5).text_size(12.8)
       .id("new-menu").track_focus(this.handle)
       .on_key_down((e) => {
         if (e.modifiers.control || e.modifiers.platform || e.modifiers.alt) return;
@@ -99,12 +101,14 @@ export default class MeshNewMenu extends View {
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
         .child(this.heading("Start a standard agent"))
         .children(choices.map((a, i) => this.agentRow(a, space, i + 1)))
-        .when(this.agents.length === 0, el => el.child(div().px(9).py(6).text_color(t.dim).child(this.failed ? "Could not load agents" : "Checking installed agents…"))))
+        .when(this.failed || this.agents.length === 0, el => el.child(div().px(9).py(6).text_color(t.dim).child(this.failed ? "Could not check installed agents" : "Checking installed agents…"))))
       .child(this.divider())
       .when(!!shared("moshi-cockpit.needs-connect"), el => el.child(this.row("connect", div().w(14).child("→"), "Connect to moshi…",
         () => run("tab.new", { name: "Connect to moshi", space: space?.id, argv: [`${home()}/.local/bin/moshi-cockpit`, "connect"] }))))
       .child(this.row("agent-new", div().w(14).child("+"), "New agent…", () => this.manage("new")))
       .child(this.row("agent-manage", div().w(14).child("≡"), "Manage agents…", () => this.manage("manage")))
+      .child(this.row("machine-new", div().w(14).child("+"), "Machine…", () => openOverlay({ mod: "mesh-agents", kind: "dialog",
+        width: 640, height: 460, props: { view: "new", tab: "machines" } })))
       .child(this.divider())
       .child(this.row("space", div().w(14).child("+"), "New space", () => run("space.new"), shortcut("space.new")))
       .child(this.row("worktree", svg("mods/workspace-chrome/branch.svg").size(14), "New worktree…", () => openOverlay({ mod: "worktree", kind: "dialog", width: 460, height: 280, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "new" } }), "", Boolean(space)))

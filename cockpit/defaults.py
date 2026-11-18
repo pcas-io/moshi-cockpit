@@ -166,12 +166,18 @@ def install_menu_tabs(paths: Paths, backup: BackupStore) -> bool:
 
 
 def menu_findings(paths: Paths) -> List[str]:
-    """Our "+" menu is a copy of herdr's: when herdr changes the original, the copy needs a look."""
+    """Our "+" menu and spaces list are copies of herdr's: when herdr changes an original, the copy needs a look."""
     findings = []
-    shipped = load_json(paths.herdr_app_home / "installed.json").get("new-menu")
-    version = shipped.get("main.js") if isinstance(shipped, dict) else None
-    if version and version != NEW_MENU_UPSTREAM:
-        findings.append("Herdr's \"+\" menu has changed; our copy (mesh-new-menu) does not know that change yet")
+    installed = load_json(paths.herdr_app_home / "installed.json")
+    for mod, upstream, finding in (
+            ("new-menu", NEW_MENU_UPSTREAM,
+             "Herdr's \"+\" menu has changed; our copy (mesh-new-menu) does not know that change yet"),
+            ("spaces", SPACES_UPSTREAM,
+             "Herdr's spaces list has changed; our copy (mesh-spaces) does not know that change yet")):
+        shipped = installed.get(mod)
+        version = shipped.get("main.js") if isinstance(shipped, dict) else None
+        if version and version != upstream:
+            findings.append(finding)
     try:
         tabs = (paths.herdr_mods / "tabs" / "main.js").read_text()
     except OSError:
@@ -187,10 +193,11 @@ def menu_findings(paths: Paths) -> List[str]:
 
 
 def cockpit_layout(main: Dict, own_menu: bool = False) -> Dict:
-    """herdr's shipped `main` layout with "Your agents" below Spaces and Agents, without the
-    files/changes panel. Shipped layouts are read-only and replaced on every start, so ours is a
-    separate file derived from the current one."""
+    """herdr's shipped `main` layout with "Your agents" below Spaces and Agents, our spaces list (mesh-spaces)
+    instead of herdr's and without the files/changes panel. Shipped layouts are read-only and replaced on every
+    start, so ours is a separate file derived from the current one; `main` keeps herdr's spaces."""
     layout = _without_mods(json.loads(json.dumps(main)), LEFT_OUT)  # deep copy
+    _swap_mod(layout, "spaces", "mesh-spaces")
     if own_menu:
         _swap_mod(layout, "tabs", "mesh-tabs")
     _add_below_mod(layout, "agents", OWN_AGENTS_BLOCK)
@@ -220,7 +227,8 @@ def install_cockpit_layout(paths: Paths, backup: BackupStore) -> str:
 
 TABS_OPENS_MENU = 'openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })'
 TABS_OPENS_OURS = 'openOverlay({ mod: "mesh-new-menu", kind: "popup", width: 250, height: 640 })'
-NEW_MENU_UPSTREAM = "163ca2db28639df5"  # installed.json of the herdr-app our mesh-new-menu was copied from
+NEW_MENU_UPSTREAM = "2f13095cb116c3cf"  # installed.json of the herdr-app our mesh-new-menu was copied from
+SPACES_UPSTREAM = "bbcc823778bd7475"  # installed.json of the herdr-app our mesh-spaces was copied from
 MOD_SUFFIXES = {".js", ".json", ".svg", ".png"}
 
 

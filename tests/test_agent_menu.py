@@ -123,6 +123,42 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         target.write_text(json.dumps({"new-menu": {"main.js": "anderer-stand"}}))
         self.assertEqual(len(defaults.menu_findings(ctx.paths)), 1)
 
+    def test_the_cockpit_layout_shows_mesh_spaces_and_main_keeps_spaces(self):
+        from cockpit import defaults
+        main = {"type": "row", "children": [{"id": "sidebar", "children": [{"content": {"mod": "spaces"}},
+                                                                          {"content": {"mod": "agents"}}]}]}
+        before = json.dumps(main)
+        for own_menu in (False, True):
+            text = json.dumps(defaults.cockpit_layout(main, own_menu=own_menu))
+            self.assertIn('"mod": "mesh-spaces"', text)
+            self.assertNotIn('"mod": "spaces"', text)
+        self.assertEqual(json.dumps(main), before)
+
+    def test_doctor_warns_when_herdr_changes_the_original_spaces(self):
+        from cockpit import defaults
+        ctx = self.ctx()
+        defaults.install_menu_tabs(ctx.paths, ctx.backup)
+        target = ctx.paths.herdr_app_home / "installed.json"
+        warning = "Herdr's spaces list has changed; our copy (mesh-spaces) does not know that change yet"
+        self.assertEqual(defaults.menu_findings(ctx.paths), [])  # no installed.json
+        target.write_text(json.dumps({"new-menu": {"main.js": defaults.NEW_MENU_UPSTREAM}}))
+        self.assertEqual(defaults.menu_findings(ctx.paths), [])  # no spaces entry
+        target.write_text(json.dumps({"new-menu": {"main.js": defaults.NEW_MENU_UPSTREAM},
+                                      "spaces": {"main.js": defaults.SPACES_UPSTREAM}}))
+        self.assertEqual(defaults.menu_findings(ctx.paths), [])
+        target.write_text(json.dumps({"new-menu": {"main.js": defaults.NEW_MENU_UPSTREAM},
+                                      "spaces": {"main.js": "changed-upstream"}}))
+        self.assertEqual(defaults.menu_findings(ctx.paths), [warning])
+
+    def test_mesh_spaces_is_allowed_and_installed(self):
+        from cockpit import defaults
+        ctx, _ = context(self)
+        changed = defaults.install_mods(ctx.paths, ctx.backup)
+        for name in ("main.js", "organize.js", "menu.js"):
+            self.assertIn(f"mesh-spaces/{name}", changed)
+            self.assertTrue((ctx.paths.herdr_mods / "mesh-spaces" / name).is_file())
+        self.assertEqual(defaults.unknown_mods(ctx.paths), [])
+
     def test_programs_that_is_not_an_object_is_left_alone(self):
         from cockpit import defaults
         ctx = self.ctx()

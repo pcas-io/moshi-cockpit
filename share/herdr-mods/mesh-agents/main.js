@@ -1,18 +1,22 @@
 // "Manage agents…" and "+ Agent" from the "+" menu and the sidebar: one dialog in the style of herdr's settings,
-// the agents on the left, the selected one or "+ Agent" (tabs New and From moshi) on the right. Everything goes
-// through `moshi-cockpit`: this mod never sees a token. Exit 3 (approval missing or expired) opens the connect
-// dialog; installing a harness and connecting ask in a terminal tab. The logic lives in rules.js, catalog.js and
-// harnesses.js (tested with node); this file only wires the views.
+// the agents on the left, the selected one or "+ Agent" (tabs New, From moshi and Machines) on the right. New on
+// another machine only starts a harness there in a new space: nothing goes to moshi or agents.json.
+// Everything goes through `moshi-cockpit`: this mod never sees a token. Exit 3 (approval missing or expired) opens
+// the connect dialog; installing a harness and connecting ask in a terminal tab. The logic lives in rules.js,
+// catalog.js, harnesses.js and machines.js (tested with node), the Machines tab in machines-view.js; this file wires
+// the views.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, home, theme, run, props, closeOverlay, openOverlay, notify, knownAgents, shared } from "herdr";
+import { exec, home, theme, run, props, closeOverlay, openOverlay, notify, knownAgents, shared, machines } from "herdr";
 import { btn, cockpit, plain } from "./util.js";
 import { addArgs, checkName, checkSkill, loadArgs, outcome, removeArgs, roleText, setArgs } from "./rules.js";
 import { harnessRows } from "./harnesses.js";
 import { catalogRows, settle } from "./catalog.js";
 import { loadSessions, startKey, startView } from "./start.js";
 import { connectKey, connectView, openConnect } from "./connect.js";
+import { loadMachines, machinesTab } from "./machines-view.js";
+import { INVENTORY_EXEC, inventoryArgs, remoteChips, remoteStart, whereChoices } from "./machines.js";
 
 const KNOWN = "new-menu.agents";  // mesh-new-menu keeps knownAgents() here, per machine ("" = this one)
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
@@ -46,13 +50,17 @@ export default class MeshAgents extends View {
     this.confirming = false;
     this.busy = false;
     this.error = null;
-    this.tab = props()?.tab === "moshi" ? "moshi" : "new";
+    this.tab = ["moshi", "machines"].includes(props()?.tab) ? props().tab : "new";
     this.harness = null;
     this.problem = null;
     this.note = null;
     this.catalog = null;
     this.catalogProblem = null;
     this.loadProblem = null;
+    this.machines = null;  // the Machines tab: machines-view.js keeps its state on this dialog
+    this.where = null;  // New: null = this Mac, else a machine from whereChoices()
+    this.remote = Object.create(null);  // New on another machine: {machine: {loading, rows, error, known}}
+    this.remoteHarness = null;
     this.known = shared(KNOWN)?.[""] ?? null;
     this.name = InputState.new({ placeholder: "Name, e.g. research" });
     this.name.on("submit", (_e, cx) => this.create(cx));
@@ -65,6 +73,7 @@ export default class MeshAgents extends View {
     if (this.view === "new") {
       this.name.focus();
       if (this.tab === "moshi") this.loadCatalog(cx);
+      if (this.tab === "machines") loadMachines(this, cx);
     }
     cx.spawn(async (cx) => {
       try {
@@ -122,6 +131,8 @@ export default class MeshAgents extends View {
     this.note = null;
     this.problem = null;
     this.harness = null;
+    this.where = null;
+    this.remoteHarness = null;
     this.name.set_value("");
     this.role.set_value("");
     this.skill.set_value("");
@@ -132,6 +143,7 @@ export default class MeshAgents extends View {
     this.tab = tab;
     if (tab === "new") this.name.focus();
     if (tab === "moshi" && !this.catalog) this.loadCatalog(cx);
+    if (tab === "machines" && !this.machines) loadMachines(this, cx);
     cx.notify();
   }
 
@@ -164,8 +176,49 @@ export default class MeshAgents extends View {
     this.reload(cx, name);
   }
 
+  // The machine New starts on: a picked one only while Herdr still has its layout ready, else this Mac.
+  whereNow(choices = whereChoices(machines())) {
+    return choices.some((c) => c.name === this.where) ? this.where : null;
+  }
+
+  pickWhere(name, cx) {
+    this.where = name;
+    this.remoteHarness = null;
+    this.problem = null;
+    if (name === null) this.name.focus();
+    else if (!this.remote[name] || this.remote[name].error) this.loadRemote(name, cx);
+    cx.notify();
+  }
+
+  // That machine's inventory (the CLI's cached call) and Herdr's own check there, side by side.
+  loadRemote(name, cx) {
+    const entry = { loading: true, rows: null, error: null, known: null };
+    this.remote[name] = entry;
+    cx.spawn(async (cx) => {
+      const [inv, known] = await Promise.all([
+        cockpit(exec, home, inventoryArgs(name, false), true, INVENTORY_EXEC).then(
+          (d) => (Array.isArray(d?.harnesses) ? { rows: d.harnesses } : { error: "moshi-cockpit gave no inventory" }),
+          (e) => ({ error: plain(e?.message ?? e, 300) })),
+        knownAgents({ on: name }).catch(() => null),
+      ]);
+      Object.assign(entry, { loading: false, rows: inv.rows ?? null, error: inv.error ?? null, known });
+      cx.notify();
+    });
+  }
+
+  startRemote(machine, cx) {
+    const entry = this.remote[machine];
+    const chip = remoteChips(entry?.rows, machine, entry?.known).find((c) => c.name === this.remoteHarness && c.selectable);
+    const row = chip && entry.rows.find((r) => r.name === chip.name);
+    if (!row) { this.problem = "Choose a harness"; cx.notify(); return; }
+    run("space.new", remoteStart(machine, row, entry.known));
+    closeOverlay(props().overlay);
+  }
+
   create(cx) {
     if (this.busy || this.view !== "new" || this.tab !== "new") return;
+    const where = this.whereNow();
+    if (where) return this.startRemote(where, cx);
     const form = { name: this.name.value().trim(), harness: this.harness, role: roleText(this.role.value()),
                    skill: this.skill.value().trim() };
     this.problem = checkName(form.name, this.data?.agents) ?? (form.harness ? null : "Choose a harness") ?? checkSkill(form.skill);
@@ -304,6 +357,36 @@ export default class MeshAgents extends View {
   }
 
   newTab(t) {
+    const choices = whereChoices(machines());
+    const where = this.whereNow(choices);
+    return v_flex().w_full().gap(10)
+      .child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(6).items_center()
+        .child(div().text_size(12).text_color(t.dim).child("Where"))
+        .children(choices.map((c, i) => btn(`agent-where-${i}`, t, c.label, (_e, cx) => this.pickWhere(c.name, cx),
+          { on: c.name === where }))))
+      .child(where ? this.remoteForm(t, where) : this.localForm(t));
+  }
+
+  // Another machine: its harnesses from the inventory, Start opens a new space there.
+  remoteForm(t, machine) {
+    const entry = this.remote[machine];
+    const chips = remoteChips(entry?.rows, machine, entry?.known);
+    const notes = chips.filter((c) => c.note);
+    return v_flex().w_full().gap(10)
+      .when(!entry || entry.loading, (el) => el.child(div().text_size(12).text_color(t.dim).child(`Checking ${machine}…`)))
+      .when(!!entry?.error, (el) => el.child(div().text_size(12).text_color(t.blocked).child(entry.error)))
+      .child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(6).items_center()
+        .children(chips.map((c) => btn(`agent-rh-${c.name}`, t, c.label,
+          (_e, cx) => { this.remoteHarness = c.name; this.problem = null; cx.notify(); },
+          { on: this.remoteHarness === c.name, enabled: c.selectable }))))
+      .when(notes.length > 0, (el) => el.child(div().text_size(11).text_color(t.dim).child(notes.map((c) => c.note).join(" · "))))
+      .child(h_flex().gap(8).items_center()
+        .child(btn("agent-start", t, "Start", (_e, cx) => this.create(cx), { primary: true, enabled: !!entry?.rows }))
+        .child(div().text_size(12).text_color(this.problem ? t.blocked : t.dim)
+          .child(this.problem || `Starts in a new space on ${machine}`)));
+  }
+
+  localForm(t) {
     const rows = harnessRows(this.data?.harnesses, this.known, cli());
     const refused = rows.filter((h) => (h.installed || h.herdrOnly) && !h.selectable && h.note);
     return v_flex().w_full().gap(10)
@@ -347,8 +430,9 @@ export default class MeshAgents extends View {
     return v_flex().w_full().flex_1().min_h(0).gap(10)
       .child(h_flex().gap(6).items_center()
         .child(btn("agent-tab-new", t, "New", (_e, cx) => this.showTab("new", cx), { on: this.tab === "new" }))
-        .child(btn("agent-tab-moshi", t, "From moshi", (_e, cx) => this.showTab("moshi", cx), { on: this.tab === "moshi" })))
-      .child(this.tab === "moshi" ? this.moshiTab(t) : this.newTab(t));
+        .child(btn("agent-tab-moshi", t, "From moshi", (_e, cx) => this.showTab("moshi", cx), { on: this.tab === "moshi" }))
+        .child(btn("agent-tab-machines", t, "Machines", (_e, cx) => this.showTab("machines", cx), { on: this.tab === "machines" })))
+      .child(this.tab === "moshi" ? this.moshiTab(t) : this.tab === "machines" ? machinesTab(this, t) : this.newTab(t));
   }
 
   render(cx) {
