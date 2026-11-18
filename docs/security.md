@@ -26,6 +26,37 @@ owner-only (0600). `doctor` reports that file when its mode is wider.
 Each token is bound to the server address it was issued for. A token is read from the Keychain only when the
 configured server is that same origin; if the configuration points somewhere else, nothing is sent.
 
+## Tokens on Linux machines
+
+A Linux machine has no macOS Keychain. moshi-cockpit picks one of two stores there, with the same service and
+account names as on the Mac. The first choice sticks, so tokens never end up split across two stores:
+
+1. If `~/.config/moshi-cockpit/secrets.json` exists, that file, without trying anything else.
+2. If `~/.config/moshi-cockpit/secrets-store` exists, the Secret Service (libsecret), again without a test.
+   That marker holds only the words `secret-service` (no token) and is written, mode 0600, the first time the
+   Secret Service takes a token. From then on the cockpit never switches to the file: if `secret-tool` later
+   fails or does not answer within 10 seconds, the command ends with "The Secret Service did not answer.
+   Unlock your keyring (or log in to a desktop session) and try again."
+3. On a machine with neither, the Secret Service is tested once: `secret-tool` must be installed and a test
+   entry must be stored, read back and cleared, each step within 5 seconds (the test entry is cleared even
+   when reading it back fails). A keyring that is locked and would wait for an unlock prompt nobody sees on a
+   headless machine fails that test, and the file is used instead, created on the first write.
+
+Tokens reach `secret-tool` on standard input, never as an argument. Any call that hangs ends after 10 seconds
+with an error that names the entry, never with a hang.
+
+The file holds `{"version": 1, "entries": {"<service>": {"<account>": "<token>"}}}` and is mode 0600; its
+folder is created 0700 when new, and an existing folder keeps its mode. Every change rewrites the file whole:
+under an exclusive lock (`.secrets.lock` next to it), into a temporary file in the same folder, synced, renamed
+over the old one, then the folder is synced, so two commands writing at once both keep their entries. Before
+reading, the cockpit opens it without following a symlink and refuses it, with one sentence that names the
+path and the fix but never the content, when it is a symlink, not a regular file, owned by another user,
+accessible to group or others, larger than 1 MiB, not valid JSON, or holds a value that is not a valid token.
+
+To move from the file to libsecret by hand: delete `~/.config/moshi-cockpit/secrets.json` and connect again,
+which stores new tokens in the Secret Service. To move the other way, delete `secrets-store` and the
+moshi-cockpit entries in your keyring, then connect again. `doctor` names the store in use.
+
 ## Device key
 
 The device key identifies this installation to moshi and is read-only: its only use is reading the

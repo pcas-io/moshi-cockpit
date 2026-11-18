@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 
 from cockpit.backup import BackupStore
-import platform
 from unittest import mock
 
 from cockpit.secrets import KeychainError, UnsupportedPlatform, default_store
@@ -16,17 +15,16 @@ TOKEN = "bt_SECRETVALUE_1234567890"
 
 class DefaultStoreTest(unittest.TestCase):
     def test_default_store_is_the_macos_keychain_on_darwin(self):
-        with mock.patch("platform.system", return_value="Darwin"):
-            store = default_store()
+        store = default_store(system=lambda: "Darwin")
         self.assertIsInstance(store, MacKeychain)
+        self.assertEqual(store.name, "macOS Keychain")
         for method in ("exists", "read", "write", "delete"):
             self.assertTrue(callable(getattr(store, method)), method)
 
     def test_default_store_refuses_other_platforms_with_a_clear_sentence(self):
-        for system in ("Linux", "Windows"):
-            with mock.patch("platform.system", return_value=system), self.assertRaises(UnsupportedPlatform) as caught:
-                default_store()
-            self.assertEqual(str(caught.exception), "Windows and Linux are not supported yet")
+        with self.assertRaises(UnsupportedPlatform) as caught:
+            default_store(system=lambda: "Windows")
+        self.assertEqual(str(caught.exception), "Windows is not supported yet")
 
 
 class KeychainTest(unittest.TestCase):
