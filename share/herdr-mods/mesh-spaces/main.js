@@ -9,7 +9,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 import { GROUPS, PINS, dropAction, filterRows, prune, sections, validEntries } from "./organize.js";
-import { menuInit, menuView, writes } from "./menu.js";
+import { machinesDialog, menuInit, menuView, writes } from "./menu.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -394,10 +394,10 @@ export default class Spaces extends View {
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
-        .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
+        .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login. Click to log in.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => {
-          if (collapsed && login) { run("app.settings", { section: "machines" }); return; }
+          if (collapsed && login) { openOverlay(machinesDialog(m)); return; }
           if (query) return; // filtering shows every machine unfolded
           this.folded.has(m) ? this.folded.delete(m) : this.folded.add(m);
           localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
@@ -405,7 +405,7 @@ export default class Spaces extends View {
         })
         .when(machine?.keeps_running_after_logout === false, el => el.child(div().id(`machine-logout-${m}`)
           .flex_none().text_color(t.blocked).tooltip("Agents stop when you disconnect. Click for the fix.")
-          .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); }).child("⚠")))
+          .on_click((_e, cx) => { cx.stop_propagation(); openOverlay(machinesDialog(m)); }).child("⚠")))
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
         .when(!collapsed, el => el.child(div().flex_1().truncate().child(m ?? "This computer"))
@@ -438,7 +438,10 @@ export default class Spaces extends View {
           .child(div().id(`machine-login-copy-${m}`).flex_none().px(5).py(2).rounded(4)
             .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
-            .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
+            .child(this.copiedLogin === login ? "Copied" : "Copy"))
+          .child(div().id(`machine-login-open-${m}`).flex_none().px(5).py(2).rounded(4)
+            .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
+            .on_click((_e, cx) => { cx.stop_propagation(); openOverlay(machinesDialog(m)); }).child("Log in")))] : [];
       const body = this.sectioned(mine, m, t, collapsed, query, draw);
       const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? body.items : loading(m) ? [loadingRow(m)] : empty ? [cell(empty)] : [])];
       const first = folded ? -1 : body.active;

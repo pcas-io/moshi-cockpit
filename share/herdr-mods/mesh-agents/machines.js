@@ -30,21 +30,35 @@ export const connectingText = (name) => `Connecting: Herdr is starting herdr-cor
 // a name that does not pass is listed and never reaches `--on`, `space.new` or `machine remove`. `recent`: names of
 // machines added a moment ago (recentNames): not connected yet, they say "Connecting" instead of their state.
 export function machineRows(list, recent = null) {
-  const rows = [{ name: null, label: "This Mac", connected: true, note: "", removable: false, connecting: false }];
+  const rows = [{ name: null, label: "This Mac", connected: true, note: "", removable: false, connecting: false, warning: null }];
   for (const m of list?.machines ?? []) {
     const label = plain(m?.name, 254);
     if (!label) continue;
     if (!passable(m.name)) {
-      rows.push({ name: label, label, connected: false, note: "name not supported", removable: false, connecting: false });
+      rows.push({ name: label, label, connected: false, note: "name not supported", removable: false, connecting: false,
+                  warning: null });
       continue;
     }
     const state = plain(m.state, 40) || "not connected";
     const connected = state === "connected";
     const connecting = !connected && !!recent?.has(m.name);
     const note = connected ? "" : connecting ? connectingText(label) : `${state.replace(/_/g, " ")}: inventory once it is connected`;
-    rows.push({ name: m.name, label, connected, note, removable: true, connecting });
+    rows.push({ name: m.name, label, connected, note, removable: true, connecting, warning: machineWarning(m) });
   }
   return rows;
+}
+
+// What Herdr's list warns about a machine, with the one action that fixes it: a login it needs ("Log in"), or
+// programs there that end with the last login, because linger is off ("Fix", only with a user that passes the
+// name rule). A login comes first: without it nothing runs there, the fix included.
+export const LOGIN_NOTE = "needs a login";
+export const LINGER_NOTE = "agents stop when you disconnect";
+
+export function machineWarning(m) {
+  if (m?.state === "needs_login") return { note: LOGIN_NOTE, action: { kind: "login", label: "Log in" } };
+  if (m?.keeps_running_after_logout !== false) return null;
+  const user = passable(m.logout_linger_user) ? m.logout_linger_user : null;
+  return { note: LINGER_NOTE, action: user ? { kind: "linger", label: "Fix", user } : null };
 }
 
 // "×" at a machine's row end: Herdr forgets it (`hc machine rm`), its terminals keep running there; the saved host
@@ -106,9 +120,14 @@ export function cellAction(h, machine) {
 
 // One machine's row of the matrix. `inv`: the view's {loading, data, error} for it; `ready`: layoutReady() for it;
 // `ago`: formats checked_at. A note or an error replaces the cells; a refresh in flight keeps the last answer.
+// `warning`: machineWarning's; it is the note of a machine that is not connected (Refresh there asks Herdr's list
+// again after a login), a connected one shows it beside its cells.
 export function matrixRow(m, inv, ready, ago) {
-  const out = { label: m.label, status: "", note: "", error: "", refresh: !!m.connected, loading: false, cells: [] };
-  if (!m.connected) return { ...out, note: m.note, refresh: !!m.connecting };  // never an unsupported name's inventory
+  const warning = m.warning ?? null;
+  const out = { label: m.label, status: "", note: "", error: "", refresh: !!m.connected, loading: false, cells: [], warning };
+  if (!m.connected) {  // never an unsupported name's inventory
+    return { ...out, note: warning?.note ?? m.note, refresh: !!m.connecting || warning?.action?.kind === "login" };
+  }
   const data = Array.isArray(inv?.data?.harnesses) ? inv.data : null;
   const checked = data ? `checked ${ago(data.checked_at)}` : "";
   if (inv?.loading) Object.assign(out, { loading: true, status: "Checking\u2026" });
@@ -128,6 +147,39 @@ export function tabCommand(spaces, machine, name, argv) {
   if (space) return { command: "tab.new", args: { name, argv, space: space.id } };
   return { command: "space.new", args: machine ? { machine, name, argv } : { name, argv } };
 }
+
+// How the CLI's held tabs end (cockpit/inventory.py held_argv): the exit code, then the tab waits for Enter.
+const HOLD = 'code=$?; printf "\\nFinished (exit %s). Press Enter to close.\\n" "$code"; read -r _';
+
+// "Log in": `hc machine login` in a held tab on this Mac, where hc asks for the password or code. The name is an
+// argument of the constant script, never shell text; one that does not pass gets no argv.
+export function loginArgv(hc, name) {
+  return passable(name) ? ["/bin/sh", "-lc", `"$1" machine login -- "$2"; ${HOLD}`, "sh", hc, name] : null;
+}
+
+export function loginCommand(spaces, hc, name) {
+  const argv = loginArgv(hc, name);
+  return argv && tabCommand(spaces, null, `Log in to ${name}`, argv);
+}
+
+// "Fix": linger on, so programs there outlive the last login. Runs with sudo on that machine in a held tab, only
+// after the inline question, where sudo asks for the password; the user is an argument, never shell text.
+export const lingerCommand = (user) => `sudo loginctl enable-linger -- ${user}`;
+
+export function lingerArgv(user) {
+  return passable(user) ? ["/bin/sh", "-lc", `sudo loginctl enable-linger -- "$1"; ${HOLD}`, "sh", user] : null;
+}
+
+export function fixCommand(spaces, machine, user) {
+  const argv = lingerArgv(user);
+  return argv && passable(machine) ? tabCommand(spaces, machine, `Fix ${machine}`, argv) : null;
+}
+
+export const lingerQuestion = (name, user) => `On ${name}, programs end when your last login closes. The fix runs `
+  + `\`${lingerCommand(user)}\` there, in a tab, and asks for your password on ${name}.`;
+
+// The machine a warning in the spaces list opened the Machines tab for (props().focus): its row is highlighted.
+export const focusName = (p) => (passable(p?.focus) ? p.focus : null);
 
 // The password fallback ("In a tab"): `machine add` attached in a tab on this Mac (hc and the CLI live here), where
 // hc's password and 2FA prompts appear.

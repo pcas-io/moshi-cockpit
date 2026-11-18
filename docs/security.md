@@ -123,9 +123,14 @@ yes. The cockpit adds no installer a vendor does not publish.
   nothing polls.
 - **Installs on a remote machine.** The vendor's own one-liner (the same fixed commands as `harness install`)
   runs on the machine as the SSH login user, into that user's home directory, in a tab you can see, after you
-  confirm the command in the dialog. The cockpit never uses `sudo`. As with the local installers, the
+  confirm the command in the dialog. Installs never use `sudo`. As with the local installers, the
   command is the vendor's pipe-to-shell command and you trust the vendor for it. Signing in runs the
   vendor's login command in a visible tab; you complete it there.
+- **Disconnect fix.** The linger fix (`sudo loginctl enable-linger -- <user>`) runs with sudo only when you
+  click Run in a tab, in a visible tab on that machine, and asks for your password there; the cockpit never
+  sees, passes or stores it. The user comes from Herdr's machine list, must pass the name rule above, and is
+  an argument of a fixed script, never shell text. Log in (`hc machine login`) likewise runs in a visible tab
+  on this Mac, where hc asks.
 - **Remote machines and moshi.** This release puts no moshi identity, token or agent on a remote machine.
   A harness started there through "Where" runs without moshi.
 

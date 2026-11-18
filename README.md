@@ -121,7 +121,13 @@ Clicking a cell does what its symbol says (its tooltip names the state):
 
 A machine that is not connected, or that Herdr is still connecting to, shows a short note in its row instead
 of the cells. The **×** at a machine's row end removes it from Herdr (`hc machine rm`) after you confirm; its
-terminals keep running there, and a saved target stays as a chip to add it again. Under the grid you add machines without a terminal. Herdr's own "Add a machine" can't answer ssh's
+terminals keep running there, and a saved target stays as a chip to add it again.
+
+- **Warnings.** A machine warning in the spaces list (⚠, or a login it needs) opens this tab with that machine's row highlighted.
+- **Log in.** A machine that needs a login says so in its row; **Log in** opens a tab on this Mac with `hc machine login`, where hc asks for the password or code; the row's **Refresh** checks it again afterwards.
+- **Fix.** A machine where agents stop when you disconnect says so in its row; **Fix** shows `sudo loginctl enable-linger -- <user>` under the grid and runs it only on **Run in a tab**, in a tab on that machine where sudo asks for your password (**Copy** copies it instead).
+
+Under the grid you add machines without a terminal. Herdr's own "Add a machine" can't answer ssh's
 questions (host key, password, installing herdr-core), so the tab does it:
 
 - **Chips.** "From ~/.ssh/config" lists the hosts Herdr does not know yet, "Saved" the targets you typed earlier

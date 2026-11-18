@@ -24,7 +24,7 @@ from cockpit.inventory import (BINARIES, INSTALLED, KNOWN, LABELS, LOGIN, MARK, 
                                held_argv, parse_probe, probe_script)
 from cockpit.paths import Paths
 from cockpit.ssh_config import read_hosts
-from cockpit.targets import check_target
+from cockpit.targets import NAME_RE, check_target
 from cockpit.text import clean
 
 Runner = Callable[[Sequence[str], int], Tuple[int, str, str]]
@@ -111,12 +111,21 @@ def _known_as(entry: Dict) -> Set[str]:
     return names - {""}
 
 
+def _logout(entry: Dict) -> Dict:
+    """hc's answer whether programs there outlive the last login (None: unknown), and the user its fix
+    (`loginctl enable-linger`) names, only when that user passes the name rule (None otherwise)."""
+    keeps, user = entry.get("keeps_running_after_logout"), entry.get("logout_linger_user")
+    return {"keeps_running_after_logout": keeps if isinstance(keeps, bool) else None,
+            "logout_linger_user": user if isinstance(user, str) and NAME_RE.fullmatch(user) else None}
+
+
 def list_machines(paths: Paths, runner: Runner) -> Dict:
     result: Dict = {"machines": []}
     known: Set[str] = set()
     try:
         for entry in _herdr_machines(paths, runner):
-            result["machines"].append({key: str(entry.get(key) or "") for key in ("name", "state", "target")})
+            row = {key: str(entry.get(key) or "") for key in ("name", "state", "target")}
+            result["machines"].append(dict(row, **_logout(entry)))
             known |= _known_as(entry)
     except ValueError as exc:
         result["problem"] = str(exc)
