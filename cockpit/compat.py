@@ -17,7 +17,7 @@ from typing import List, Optional, Sequence, Tuple
 from cockpit.paths import Paths
 
 TESTED_HERDR_APP = ("0.1.13", "0.1.16")  # 0.1.16: the mods were checked against it
-TESTED_HERDR_CORE = ("0.1.18",)
+TESTED_HERDR_CORE = ("0.1.18", "0.1.21")
 HERDR_URL = "https://herdr.dev"
 UNKNOWN = "unknown"  # the bundle is there, its version cannot be read
 MAX_VERSION = 40

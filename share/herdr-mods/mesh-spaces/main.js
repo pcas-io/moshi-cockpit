@@ -1,4 +1,4 @@
-// Herdr's spaces mod (Apache-2.0), copied from herdr-app 0.1.16 (installed.json main.js bbcc823778bd7475). Ours adds: filter field, a machine header from one machine on, pinned → groups → rest, and its own right-click menu (menu.js).
+// Herdr's spaces mod (Apache-2.0), copied from herdr-app 0.1.16 (installed.json main.js bbcc823778bd7475). Ours adds: a compact filter field, no "New space there" row in the full list, a machine header from one machine on, pinned → groups → rest, and its own right-click menu (menu.js).
 
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
 // grouped by machine. After a space's name, the repo
@@ -405,13 +405,14 @@ export default class Spaces extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
-      const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().rounded(7)
-        .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+      // A machine without spaces: in the rail a "+" cell (its header has none there); in the full list nothing, the
+      // header's "+" makes one (ours: no "New space there" row eating the list's height).
+      const empty = collapsed ? h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().items_center().rounded(6)
+        .text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => run("space.new", { machine: m ?? "" }))
-        .when(collapsed, el => el.w(RAIL_CELL).rounded(6).justify_center().tooltip(`New space on ${m ?? "this computer"}`)
-          .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
-            .child(svg("mods/workspace-chrome/plus.svg").size(10))))
-        .when(!collapsed, el => el.child(svg("mods/workspace-chrome/plus.svg").size(12)).child("New space there"));
+        .w(RAIL_CELL).justify_center().tooltip(`New space on ${m ?? "this computer"}`)
+        .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
+          .child(svg("mods/workspace-chrome/plus.svg").size(10))) : null;
       if (!collapsed && rebuilt) { before += 1; return [head]; }
       const cell = collapsed ? railCell : (el) => el;
       const guidance = !collapsed && login ? [v_flex().px(8).pb(6).gap(3).flex_none()
@@ -423,7 +424,7 @@ export default class Spaces extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
       const body = this.sectioned(mine, m, t, collapsed, query, draw);
-      const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? body.items : [loading(m) ? loadingRow(m) : cell(empty)])];
+      const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? body.items : loading(m) ? [loadingRow(m)] : empty ? [cell(empty)] : [])];
       const first = folded ? -1 : body.active;
       if (first >= 0) this.activeAt = before + 1 + guidance.length + first;
       before += items.length;
@@ -598,14 +599,14 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .when(!collapsed, el => el.child(div().id("space-filter").px(8).pb(6).flex_none()
+      .when(!collapsed, el => el.child(div().id("space-filter").px(8).pb(4).flex_none()
         .on_key_down((e, cx) => {
           if (e.key !== "escape" || !this.filter.value()) return;
           this.filter.set_value("");
           cx.stop_propagation();
           cx.notify();
         })
-        .child(Input.new(this.filter).w_full().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))))
+        .child(Input.new(this.filter).w_full().h(22).px(6).rounded(5).border_1().border_color(t.input).bg(t.background).text_size(11.5))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })

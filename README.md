@@ -99,32 +99,35 @@ Each agent's Vibe profile (`config.toml`) is written by the cockpit: hand edits 
 ## Machines
 
 The "+" menu has a row **Machine…** (below "Manage agents…"); it opens "+ Agent" on the **Machines** tab. The
-tab lists this Mac and each machine of Herdr's machine list, and for each of them the six harnesses `claude`,
-`codex`, `vibe`, `agy`, `grok` and `opencode` in one of three states:
+tab is a compact grid: one row per machine (this Mac first, then each machine of Herdr's machine list), one
+column per harness (`claude`, `codex`, `vibe`, `agy`, `grok` and `opencode`). Each cell shows one of three states,
+as the legend above the grid says:
 
-- **Ready:** found, and signed in.
-- **Installed, not signed in:** found, and not signed in or not known to be (not every vendor offers a way to
-  tell, so unknown counts here).
-- **Missing:** not found.
+- **● Ready:** found, and signed in.
+- **◐ Sign in** (installed, not signed in): found, and not signed in or not known to be (not every vendor offers
+  a way to tell, so unknown counts here).
+- **○ Install** (missing): not found.
 
-A row has one button where one applies:
+Clicking a cell does what its symbol says (its tooltip names the state):
 
-- **Install** (Missing). On this Mac it runs `moshi-cockpit harness install`, which asks y/N in its tab. On
-  another machine the dialog shows the vendor's command first and runs it only after you confirm, in a new
-  tab on that machine, as your SSH login user, into your home directory, never with `sudo`. A machine without
-  `curl` shows a note instead of the button.
-- **Sign in** (Installed, not signed in). Opens a tab on that machine with the vendor's login command:
-  `claude auth login`, `codex login --device-auth`, `vibe --setup`, `agy` (its first start signs in),
-  `grok login --device-auth` or `opencode auth login`.
+- **Install.** On this Mac it runs `moshi-cockpit harness install`, which asks y/N in its tab. On another
+  machine the dialog shows the vendor's command under the grid first and runs it only after you confirm, in a
+  new tab on that machine, as your SSH login user, into your home directory, never with `sudo`. On a machine
+  without `curl` the cell stays empty and the row says "needs curl".
+- **Sign in.** Opens a tab on that machine with the vendor's login command: `claude auth login`,
+  `codex login --device-auth`, `vibe --setup`, `agy` (its first start signs in), `grok login --device-auth` or
+  `opencode auth login`.
 
-Under the machines, "From ~/.ssh/config" lists the hosts Herdr does not know yet. **Add** runs
-`moshi-cockpit machine add` in a tab, where the host key, password or 2FA prompts of `hc machine add` appear,
-and then prints the six states of the new machine.
+A machine that is not connected, or that Herdr is still connecting to, shows a short note in its row instead
+of the cells. Under the grid, "From ~/.ssh/config" lists the hosts Herdr does not know yet as **+ host** chips.
+A chip runs `moshi-cockpit machine add` in a tab, where the host key, password or 2FA prompts of
+`hc machine add` appear, and then prints the six states of the new machine.
 
 The inventory is asked when the tab opens (a machine checked less than a minute ago is shown from the cache),
-after `machine add`, and when you press **Refresh** on a machine. Nothing polls. A machine that does not answer
-shows one error line and keeps its last good result in the cache. Machines that are not connected are listed
-and checked the next time the Machines tab opens after they are; nothing re-checks them on its own.
+after `machine add`, and when you press **Refresh** next to the time a machine was last checked. Nothing polls. A
+machine that does not answer shows one error line and keeps its last good result in the cache. Machines that are
+not connected are listed and checked the next time the Machines tab opens after they are; nothing re-checks them
+on its own.
 
 ## Spaces
 

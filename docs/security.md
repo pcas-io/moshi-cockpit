@@ -136,7 +136,7 @@ pre-push hook and `tools/check.sh` run it, and without the list it fails closed.
 - Herdr mods run with full rights in your Herdr window. The cockpit ships its own and `doctor` warns about any
   mod it does not know, but it cannot vouch for mods you add.
 - Herdr updates itself. A new version it was not tested with only produces a `doctor` warning.
-- The vendor installers behind `harness install` and the Install button of the Machines tab are the vendors' own pipe-to-shell commands; you trust them
+- The vendor installers behind `harness install` and the Install cells of the Machines tab are the vendors' own pipe-to-shell commands; you trust them
   the way you would if you ran them by hand.
 - The leak guard only knows the words on your private list.
 

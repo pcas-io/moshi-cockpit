@@ -1,5 +1,5 @@
 // "+ Agent" → Machines: what the tab makes of `machine list --json` and `machine inventory --json`, and the tabs
-// its buttons open; "+ Agent" → New on another machine. Pure, so `node --test` can load it
+// its cells and chips open; "+ Agent" → New on another machine. Pure, so `node --test` can load it
 // (tests/js/machines.test.mjs); the views are machines-view.js and main.js.
 
 import { plain } from "./rules.js";
@@ -58,9 +58,9 @@ export function layoutReady(ms, machine) {
 
 export const connectingNote = (machine) => `Herdr is still connecting to ${machine}`;
 
-// A harness row's button. Installing on another machine asks here first (the command runs there as the ssh
-// user); on this Mac `moshi-cockpit harness install` asks y/N in its own tab. `ready`: layoutReady() for that
-// machine; until then no button (the view shows connectingNote once for the machine).
+// A harness's action (what its matrix cell does). Installing on another machine asks here first (the command runs
+// there as the ssh user); on this Mac `moshi-cockpit harness install` asks y/N in its own tab. `ready`:
+// layoutReady() for that machine; until then no action (the row shows connectingNote instead of its cells).
 export function harnessAction(row, machine, ready = true) {
   const none = { kind: null, label: "", argv: null, confirm: null, note: "" };
   if (machine && !ready) return none;
@@ -71,6 +71,42 @@ export function harnessAction(row, machine, ready = true) {
   if (!row.install_argv) return machine ? { ...none, note: `needs curl on ${machine}` } : none;
   const confirm = machine ? `Runs ${row.install_command} on ${machine} as your SSH user, in a new tab.` : null;
   return { ...none, kind: "install", label: "Install", argv: row.install_argv, confirm };
+}
+
+// The Machines matrix: one column per harness, in this order, with a label short enough for a narrow column.
+export const COLUMNS = [["claude", "Claude"], ["codex", "Codex"], ["vibe", "Vibe"], ["agy", "Agy"], ["grok", "Grok"],
+                        ["opencode", "OpenCode"]].map(([name, short]) => ({ name, short }));
+
+// What a cell shows, and the legend under the tab's buttons.
+export const GLYPH = { ready: "\u25cf", "sign-in": "\u25d0", install: "\u25cb" };
+export const LEGEND = [{ show: "ready", text: "Ready" }, { show: "sign-in", text: "Sign in" }, { show: "install", text: "Install" }];
+
+// One cell: `show` is "ready", "sign-in", "install" or null (empty); `action` is harnessAction's, unchanged.
+// Cells are only drawn once Herdr has the machine's layout (matrixRow), so the action is asked as ready.
+export function cellAction(h, machine) {
+  const action = harnessAction(h, machine, true);
+  const label = plain(h?.label, 40);
+  if (h?.state === "ready") return { show: "ready", action, hint: `${label}: ${STATE_TEXT.ready}` };
+  if (action.kind === "sign-in") return { show: "sign-in", action, hint: `${label}: ${STATE_TEXT.installed}. Click to sign in.` };
+  if (action.kind === "install") return { show: "install", action, hint: `${label}: ${STATE_TEXT.missing}. Click to install.` };
+  return { show: null, action, hint: action.note ? `${label}: ${STATE_TEXT.missing}, ${action.note}` : "" };
+}
+
+// One machine's row of the matrix. `inv`: the view's {loading, data, error} for it; `ready`: layoutReady() for it;
+// `ago`: formats checked_at. A note or an error replaces the cells; a refresh in flight keeps the last answer.
+export function matrixRow(m, inv, ready, ago) {
+  const out = { label: m.label, status: "", note: "", error: "", refresh: !!m.connected, loading: false, cells: [] };
+  if (!m.connected) return { ...out, note: m.note };  // never an unsupported name's inventory
+  const data = Array.isArray(inv?.data?.harnesses) ? inv.data : null;
+  const checked = data ? `checked ${ago(data.checked_at)}` : "";
+  if (inv?.loading) Object.assign(out, { loading: true, status: "Checking\u2026" });
+  if (inv?.error) return { ...out, error: inv.error };
+  if (!data) return out;
+  if (!out.loading) out.status = checked;
+  if (!ready) return { ...out, note: connectingNote(m.label) };
+  out.cells = COLUMNS.map((c) => ({ ...c, ...cellAction(data.harnesses.find((h) => h?.name === c.name), m.name) }));
+  if (!out.loading && out.cells.some((c) => c.action.note)) out.status = `needs curl \u00b7 ${checked}`;
+  return out;
 }
 
 // Where the tab opens: in the first space on that machine (this Mac: a space without a machine), else in a new
