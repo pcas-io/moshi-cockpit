@@ -1,4 +1,4 @@
-// Herdr's spaces mod (Apache-2.0), copied from herdr-app 0.1.16 (installed.json main.js bbcc823778bd7475). Ours adds: a compact filter field, no "New space there" row in the full list, a machine header from one machine on, pinned → groups → rest, and its own right-click menu (menu.js).
+// Herdr's spaces mod (Apache-2.0), copied from herdr-app 0.1.16 (installed.json main.js bbcc823778bd7475). Ours adds: a compact filter field, no "New space there" row in the full list, a machine header from one machine on, pinned → groups → rest, its own right-click menu (menu.js), and a drag into a group, the pinned spaces or the rest (organize.js dropAction).
 
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
 // grouped by machine. After a space's name, the repo
@@ -8,8 +8,8 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
-import { GROUPS, PINS, filterRows, prune, sections, validEntries } from "./organize.js";
-import { menuInit, menuView } from "./menu.js";
+import { GROUPS, PINS, dropAction, filterRows, prune, sections, validEntries } from "./organize.js";
+import { menuInit, menuView, writes } from "./menu.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -87,7 +87,9 @@ export default class Spaces extends View {
     this.shown = new Set(spaces().map((s) => s.id));
     this.born = {};
     this.pressed = null;
+    this.pressedNested = false; // the pressed row is a worktree: it follows its checkout, no section change
     this.over = null;
+    this.overGroup = null; // the group header a drop would add the pressed space to
     this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
@@ -304,6 +306,20 @@ export default class Spaces extends View {
                   props: { view: "menu", target: { id: w.id }, machine: w.machine ?? null, nested: Boolean(tree) } });
   }
 
+  // What dropping the pressed space on `target` of machine `m` does (dropAction): the store writes, Herdr's move.
+  dropOn(target, m) {
+    const source = spaces().find(s => s.id === this.pressed);
+    const pins = stored(PINS), groups = stored(GROUPS);
+    const next = source && dropAction({ id: source.id, machine: source.machine ?? null, nested: this.pressedNested }, target, pins, groups, m);
+    return next ? { ...writes(pins, groups, next), id: source.id, move: next.move } : null;
+  }
+
+  land(drop) {
+    if (!drop) return;
+    for (const [key, value] of drop.writes) setShared(key, value);
+    if (drop.move !== null) run("space.move", { id: drop.id, index: drop.move });
+  }
+
   orderingDue(now) {
     return this.ordering && now - this.ordering.at >= 1000
       && this.ordering.machines.every(name => machines().some(m => m.name === name && m.layout === "ready"));
@@ -353,7 +369,7 @@ export default class Spaces extends View {
   grouped(t, collapsed) {
     const query = collapsed ? "" : this.filter.value().trim(); // the rail has no filter field
     const rows = filterRows(this.ordered(), query);
-    const draw = (r, member) => (collapsed ? this.compact(r, t) : this.row(r, t, member));
+    const draw = (r, section) => (collapsed ? this.compact(r, t) : this.row(r, t, section));
     // Where the active space's row lands among the children this returns: the list scrolls by its direct
     // children, and machine headers, login notes and loading rows count too.
     this.activeAt = -1;
@@ -443,20 +459,39 @@ export default class Spaces extends View {
       const folded = group && !collapsed && !query && this.groupsFolded.has(s.id);
       if (s.kind === "rest" && grouped) items.push(div().id(`rest-${m ?? "local"}`).h(1).mx(8).my(4).flex_none().bg(t.border));
       grouped ||= group;
-      if (group && !collapsed) items.push(this.groupHead(s, folded, Boolean(query), t));
+      if (group && !collapsed) items.push(this.groupHead(s, m, folded, Boolean(query), t));
       if (folded) continue;
       for (const r of s.rows) {
         if (r.w.active) active = items.length;
-        items.push(draw(r, group));
+        items.push(draw(r, s));
       }
     }
     return { items, active };
   }
 
-  // While a filter is on, every group shows unfolded and its header doesn't toggle.
-  groupHead(s, folded, filtering, t) {
-    return h_flex().id(`group-${s.id}`).h(24).flex_none().px(8).gap(7).items_center().text_size(11).text_color(t.dim)
-      .when(!filtering, el => el.cursor_pointer().hover(st => st.bg(t.hover)))
+  // While a filter is on, every group shows unfolded and its header doesn't toggle. A space dragged onto the
+  // header joins the group (folded or not); the header lights up while that drop would change something.
+  groupHead(s, m, folded, filtering, t) {
+    const target = { kind: "group", id: s.id };
+    return h_flex().id(`group-${s.id}`).h(24).flex_none().px(8).gap(7).items_center().rounded(6).text_size(11).text_color(t.dim)
+      .when(!filtering && this.overGroup !== s.id, el => el.cursor_pointer().hover(st => st.bg(t.hover)))
+      .when(this.overGroup === s.id, el => el.bg(t.selected).text_color(t.foreground))
+      .on_mouse_move((_e, cx) => {
+        if (this.pressed === null) return;
+        const over = this.dropOn(target, m)?.writes.length ? s.id : null;
+        if (this.overGroup !== over || this.over !== null) {
+          this.overGroup = over;
+          this.over = null;
+          cx.notify();
+        }
+      })
+      .on_mouse_up("left", (_e, cx) => {
+        if (this.pressed !== null && this.overGroup === s.id) this.land(this.dropOn(target, m));
+        this.pressed = null;
+        this.over = null;
+        this.overGroup = null;
+        cx.notify();
+      })
       .on_click((_e, cx) => {
         if (filtering) return;
         this.groupsFolded.has(s.id) ? this.groupsFolded.delete(s.id) : this.groupsFolded.add(s.id);
@@ -490,8 +525,10 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, tree }, t, member = false) {
+  // `section`: the sections() entry the row is drawn in; a checkout dropped here from another section joins it.
+  row({ w, i, g, tree }, t, section = null) {
     const on = w.active;
+    const member = section?.kind === "group";
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
@@ -515,25 +552,28 @@ export default class Spaces extends View {
       ))
       .on_mouse_down("left", () => {
         this.pressed = w.id;
+        this.pressedNested = Boolean(tree);
         this.over = w.id;
       })
       .on_mouse_move((_e, cx) => {
         const source = spaces().find(s => s.id === this.pressed);
         const over = source && (source.machine ?? null) === (w.machine ?? null) ? w.id : null;
-        if (this.pressed !== null && this.over !== over) {
+        if (this.pressed !== null && (this.over !== over || this.overGroup !== null)) {
           this.over = over;
+          this.overGroup = null;
           cx.notify();
         }
       })
       .on_mouse_up("left", (_e, cx) => {
         const from = this.pressed;
-        const over = this.over;
+        if (from !== null && this.over === w.id && from !== w.id && section) {
+          // Same section: Herdr's order only; another section: it joins that one too (dropAction).
+          const index = spaces().findIndex(s => s.id === w.id);
+          this.land(this.dropOn({ kind: "row", id: w.id, section, index: index === -1 ? null : index + 1 }, w.machine ?? null));
+        } else if (from === w.id) run("space.select", { id: w.id });
         this.pressed = null;
         this.over = null;
-        if (from !== null && over === w.id && from !== w.id) {
-          const index = spaces().findIndex(s => s.id === w.id);
-          if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
+        this.overGroup = null;
         cx.notify();
       })
       .on_mouse_down("right", () => this.menu(w, tree))
@@ -610,7 +650,7 @@ export default class Spaces extends View {
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
+        .on_mouse_up("left", (_e, cx) => { this.pressed = null; this.overGroup = null; cx.notify(); })
         .children(list));
   }
 }

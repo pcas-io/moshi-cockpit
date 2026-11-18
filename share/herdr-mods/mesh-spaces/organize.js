@@ -96,6 +96,30 @@ export function addToGroup(pins, groups, groupId, id) {
   return { pins: unpin(pins, id), groups: moved };
 }
 
+// The section space `id` of `machine` is listed in: {kind: "pinned"}, {kind: "group", id} or {kind: "rest"}.
+function sectionOf(id, pins, groups, machine) {
+  if (pins.some((p) => p.id === id && on(p.machine, machine))) return { kind: "pinned" };
+  const home = groups.find((g) => on(g.machine, machine) && g.spaces.includes(id));
+  return home ? { kind: "group", id: home.id } : { kind: "rest" };
+}
+
+// A drag of `source` {id, machine, nested} dropped on `target` of `machine`: a row {kind: "row", id, section, index}
+// (section: the sections() entry it is drawn in; index: where space.move puts the source, null when unknown) or a
+// group's header {kind: "group", id}. A checkout dropped into another section joins it: the pinned spaces pin it, a
+// group takes it, the rest unpins it or takes it out of its group. A row also moves it there in Herdr's order (move:
+// the index), a header doesn't (move: null). In its own section, and for a worktree (it follows its checkout), only
+// the move. Another machine's space: null.
+export function dropAction(source, target, pins, groups, machine) {
+  if (!on(source.machine, machine)) return null;
+  const move = target.kind === "row" ? target.index ?? null : null;
+  const to = target.kind === "group" ? { kind: "group", id: target.id } : target.section;
+  const from = sectionOf(source.id, pins, groups, machine);
+  if (source.nested || (to.kind === from.kind && to.id === from.id)) return { pins, groups, move };
+  if (to.kind === "pinned") return { ...pin(pins, groups, source.id, machine), move };
+  if (to.kind === "group") return { ...addToGroup(pins, groups, to.id, source.id), move };
+  return { pins: unpin(pins, source.id), groups: removeFromGroup(groups, source.id), move };
+}
+
 // A group name without control characters, runs of white space as one space, trimmed.
 const cleanName = (name) => String(name ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
 const nameTaken = (groups, machine, clean) =>
