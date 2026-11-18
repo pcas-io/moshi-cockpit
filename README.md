@@ -155,7 +155,8 @@ In the cockpit layout, Herdr's spaces list is replaced by `mesh-spaces`, a copy 
   machine;
 - **pinned** spaces first, then your **groups**, then the rest; a group can be folded;
 - a right-click menu on a space: **Pin** or **Unpin**, **Move to** a group of the same machine, **New group…**
-  (asks for a name), **Remove from** its group, and **More…** for Herdr's own space menu.
+  (asks for a name), **Remove from** its group, and **More…** for Herdr's own space menu;
+- drag a space onto a group (or into the pinned spaces, or back to the rest).
 
 Pins and groups are kept per machine in Herdr's shared store. A pinned space is in no group; a worktree goes
 where its checkout goes. When a space is gone its entry is dropped, but not while its machine is offline.

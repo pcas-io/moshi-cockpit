@@ -8,7 +8,7 @@ import { GROUPS, PINS, addToGroup, nameRefusal, newGroup, pin, removeFromGroup, 
 const on = (a, b) => (a ?? null) === (b ?? null);
 
 // The shared-store writes that turn pins and groups into `next`: only the lists that changed.
-function writes(pins, groups, next) {
+export function writes(pins, groups, next) {
   const out = [];
   if (next.pins !== pins) out.push([PINS, next.pins]);
   if (next.groups !== groups) out.push([GROUPS, next.groups]);

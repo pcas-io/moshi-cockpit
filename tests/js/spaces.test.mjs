@@ -2,10 +2,10 @@
 // Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GROUPS, PINS, addToGroup, blocks, filterRows, matches, nameRefusal, newGroup, pin, prune, removeFromGroup, sections,
+import { GROUPS, PINS, addToGroup, blocks, dropAction, filterRows, matches, nameRefusal, newGroup, pin, prune, removeFromGroup, sections,
          unpin, validEntries }
   from "../../share/herdr-mods/mesh-spaces/organize.js";
-import { act, groupAction, menuItems } from "../../share/herdr-mods/mesh-spaces/menu.js";
+import { act, groupAction, menuItems, writes } from "../../share/herdr-mods/mesh-spaces/menu.js";
 
 // A row as ordered() makes it: the space, its index, its git, its tree mark (null for a checkout).
 const space = (id, extra = {}) => ({ id, name: id.split("/").pop(), folder: "", branch: null, machine: null, ...extra });
@@ -148,6 +148,94 @@ test("damaged stored entries are left out", () => {
   assert.equal(validEntries(GROUPS, clean), clean); // nothing damaged: the same array back
 });
 
+// A drag: the dragged space and where it is dropped (a row in its section, or a group's header).
+const drag = (id, machine = "devbox", nested = false) => ({ id, machine, nested });
+const onRow = (id, section, index) => ({ kind: "row", id, section, index });
+const onHead = (id) => ({ kind: "group", id });
+const PINNED = { kind: "pinned" }, REST = { kind: "rest" };
+const inGroup = (id) => ({ kind: "group", id });
+
+test("a space dropped into another section joins it and lands where it was dropped", () => {
+  const pins = [{ id: "devbox/s1", machine: "devbox" }];
+  const groups = [{ id: "g1", name: "Web", machine: "devbox", spaces: ["devbox/s2", "devbox/s3"] },
+                  { id: "g2", name: "Ops", machine: "devbox", spaces: ["devbox/s4"] }];
+  // rest → a group's row: into that group, moved to the drop row's index
+  assert.deepEqual(dropAction(drag("devbox/s5"), onRow("devbox/s3", inGroup("g1"), 3), pins, groups, "devbox"),
+                   { pins, groups: [{ ...groups[0], spaces: ["devbox/s2", "devbox/s3", "devbox/s5"] }, groups[1]], move: 3 });
+  // a pinned space into a group: unpinned
+  const pinnedToGroup = dropAction(drag("devbox/s1"), onRow("devbox/s4", inGroup("g2"), 4), pins, groups, "devbox");
+  assert.deepEqual(pinnedToGroup, { pins: [], groups: [groups[0], { ...groups[1], spaces: ["devbox/s4", "devbox/s1"] }], move: 4 });
+  // rest → a pinned row: pinned
+  assert.deepEqual(dropAction(drag("devbox/s5"), onRow("devbox/s1", PINNED, 1), pins, groups, "devbox"),
+                   { pins: [...pins, { id: "devbox/s5", machine: "devbox" }], groups, move: 1 });
+  // a grouped space onto a pinned row: pinned, out of its group (the group it leaves empty goes)
+  assert.deepEqual(dropAction(drag("devbox/s4"), onRow("devbox/s1", PINNED, 1), pins, groups, "devbox"),
+                   { pins: [...pins, { id: "devbox/s4", machine: "devbox" }], groups: [groups[0]], move: 1 });
+  // pinned → the rest: unpinned, groups untouched
+  const pinnedToRest = dropAction(drag("devbox/s1"), onRow("devbox/s5", REST, 5), pins, groups, "devbox");
+  assert.deepEqual(pinnedToRest, { pins: [], groups, move: 5 });
+  assert.equal(pinnedToRest.groups, groups); // unchanged list: the very array, so nothing is written for it
+  // a group → the rest: out of its group
+  assert.deepEqual(dropAction(drag("devbox/s2"), onRow("devbox/s5", REST, 5), pins, groups, "devbox"),
+                   { pins, groups: [{ ...groups[0], spaces: ["devbox/s3"] }, groups[1]], move: 5 });
+  // a group → another group's row: moved over (the group it leaves empty goes)
+  assert.deepEqual(dropAction(drag("devbox/s4"), onRow("devbox/s2", inGroup("g1"), 2), pins, groups, "devbox"),
+                   { pins, groups: [{ ...groups[0], spaces: ["devbox/s2", "devbox/s3", "devbox/s4"] }], move: 2 });
+  // no index for the drop row: the section still changes, nothing is moved
+  assert.equal(dropAction(drag("devbox/s5"), onRow("devbox/s1", PINNED, null), pins, groups, "devbox").move, null);
+  assert.deepEqual(groups[0].spaces, ["devbox/s2", "devbox/s3"]); // inputs never change
+  assert.deepEqual(pins, [{ id: "devbox/s1", machine: "devbox" }]);
+});
+
+test("a space dropped on a group's header joins that group without moving", () => {
+  const pins = [{ id: "s1", machine: null }];
+  const groups = [{ id: "g1", name: "Web", machine: null, spaces: ["s2"] }, { id: "g2", name: "Ops", machine: null, spaces: ["s3"] }];
+  assert.deepEqual(dropAction(drag("s4", null), onHead("g1"), pins, groups, null),
+                   { pins, groups: [{ ...groups[0], spaces: ["s2", "s4"] }, groups[1]], move: null });
+  assert.deepEqual(dropAction(drag("s1", null), onHead("g2"), pins, groups, null),
+                   { pins: [], groups: [groups[0], { ...groups[1], spaces: ["s3", "s1"] }], move: null });
+  assert.deepEqual(dropAction(drag("s3", null), onHead("g1"), pins, groups, null),
+                   { pins, groups: [{ ...groups[0], spaces: ["s2", "s3"] }], move: null });
+  // its own group's header, or a group that is gone: nothing changes
+  for (const head of [onHead("g1"), onHead("gone")]) {
+    const same = dropAction(drag("s2", null), head, pins, groups, null);
+    assert.equal(same.pins, pins);
+    assert.equal(same.groups, groups);
+    assert.equal(same.move, null);
+  }
+});
+
+test("a drop in its own section, or of a worktree, only moves it; another machine's does nothing", () => {
+  const pins = [{ id: "devbox/s1", machine: "devbox" }, { id: "devbox/s6", machine: "devbox" }];
+  const groups = [{ id: "g1", name: "Web", machine: "devbox", spaces: ["devbox/s2", "devbox/s3"] }];
+  const only = (result, move) => {
+    assert.equal(result.pins, pins);
+    assert.equal(result.groups, groups);
+    assert.equal(result.move, move);
+  };
+  only(dropAction(drag("devbox/s2"), onRow("devbox/s3", inGroup("g1"), 3), pins, groups, "devbox"), 3);
+  only(dropAction(drag("devbox/s1"), onRow("devbox/s6", PINNED, 6), pins, groups, "devbox"), 6);
+  only(dropAction(drag("devbox/s4"), onRow("devbox/s5", REST, 5), pins, groups, "devbox"), 5);
+  // a worktree follows its checkout: moved in Herdr's order, never into a section; on a header nothing happens
+  only(dropAction(drag("devbox/s7", "devbox", true), onRow("devbox/s2", inGroup("g1"), 2), pins, groups, "devbox"), 2);
+  only(dropAction(drag("devbox/s7", "devbox", true), onRow("devbox/s1", PINNED, 1), pins, groups, "devbox"), 1);
+  only(dropAction(drag("devbox/s7", "devbox", true), onHead("g1"), pins, groups, "devbox"), null);
+  // a pin of the same id on another machine doesn't make it pinned here
+  assert.deepEqual(dropAction(drag("s1", null), onRow("s9", REST, 9), pins, [], null), { pins, groups: [], move: 9 });
+  // spaces move only within their machine
+  assert.equal(dropAction(drag("build-1/s1", "build-1"), onRow("devbox/s3", inGroup("g1"), 3), pins, groups, "devbox"), null);
+  assert.equal(dropAction(drag("s1", null), onHead("g1"), pins, groups, "devbox"), null);
+});
+
+test("a drop writes only the lists that changed", () => {
+  const pins = [{ id: "s1", machine: null }];
+  const groups = [{ id: "g1", name: "Web", machine: null, spaces: ["s2"] }];
+  assert.deepEqual(writes(pins, groups, dropAction(drag("s1", null), onRow("s3", REST, 3), pins, groups, null)).writes, [[PINS, []]]);
+  assert.deepEqual(writes(pins, groups, dropAction(drag("s3", null), onHead("g1"), pins, groups, null)).writes,
+                   [[GROUPS, [{ ...groups[0], spaces: ["s2", "s3"] }]]]);
+  assert.deepEqual(writes(pins, groups, dropAction(drag("s3", null), onRow("s4", REST, 4), pins, groups, null)).writes, []);
+});
+
 // What a menu item does, recorded instead of done: the host calls menu.js makes.
 function fakeHost() {
   const calls = [];
@@ -239,4 +327,14 @@ test("the full list has no filler row per empty machine, and the filter field st
   assert.match(source, /e\.key !== "escape"/);
   // the machine header's "+" still makes a space there
   assert.match(source, /machine-add-\$\{m \?\? "local"\}`\)[\s\S]{0,200}run\("space\.new", \{ machine: m \?\? "" \}\)/);
+});
+
+test("rows and group headers take drops through dropAction", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../../share/herdr-mods/mesh-spaces/main.js", import.meta.url), "utf8");
+  // a row drop names the section the row is drawn in; a header drop adds to its group, nothing else is a drop zone
+  assert.match(source, /this\.land\(this\.dropOn\(\{ kind: "row", id: w\.id, section, index:/);
+  assert.match(source, /groupHead\(s, m, folded, filtering, t\) \{[\s\S]{0,1500}on_mouse_up\("left"[\s\S]{0,120}this\.land\(this\.dropOn\(target, m\)\)/);
+  assert.equal((source.match(/this\.land\(/g) ?? []).length, 2);
+  assert.ok(source.split("\n").length <= 700);
 });
