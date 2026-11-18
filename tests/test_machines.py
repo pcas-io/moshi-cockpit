@@ -305,6 +305,40 @@ class MachinesTest(unittest.TestCase):
         self.assertTrue(all(entry["at"] == 3000.0 for entry in data.values()))
         self.assertEqual(sorted(p.name for p in self.paths.state.iterdir()), ["inventory.json", "inventory.lock"])
 
+    def test_remove_runs_hc_rm_and_drops_only_that_cache_entry(self):
+        from cockpit import hosts
+        from cockpit.backup import BackupStore
+        probe = FakeRunner(probe=(0, probe_out({"claude": "ready"}), ""))
+        for name in ("devbox", "build-1", None):
+            machines.inventory(self.paths, name, probe, now=lambda: 1000.0)
+        hosts.add_host(self.paths, BackupStore(self.paths.state), "devbox")
+        saved = (self.paths.mesh_config.parent / "hosts.json").read_bytes()
+        runner = FakeRunner(probe=(0, "", ""))
+        self.assertEqual(machines.remove_machine(self.paths, "devbox", runner), {"ok": True, "machine": "devbox"})
+        self.assertEqual(runner.calls, [([str(self.paths.herdr_core_bin), "machine", "rm", "--", "devbox"],
+                                         machines.REMOVE_TIMEOUT)])
+        self.assertEqual(machines.REMOVE_TIMEOUT, 30)
+        self.assertEqual(sorted(json.loads(self.cache.read_text())), ["", "build-1"])
+        self.assertEqual((self.paths.mesh_config.parent / "hosts.json").read_bytes(), saved)  # the chip stays to add it again
+        self.assertEqual(machines.remove_machine(self.paths, "lab-2", runner)["ok"], True)  # no cache entry: fine
+
+    def test_remove_refuses_an_option_and_reports_hc_in_one_line(self):
+        for name in ["-oProxyCommand=x", "--help", "a b", "a;b", ""]:
+            runner = FakeRunner()
+            with self.assertRaises(ValueError):
+                machines.remove_machine(self.paths, name, runner)
+            self.assertEqual(runner.calls, [])
+        machines.inventory(self.paths, "devbox", FakeRunner(probe=(0, probe_out(), "")), now=lambda: 1000.0)
+        before = self.cache.read_bytes()
+        error = json.dumps({"error": {"kind": "not_found", "message": "no machine called devbox"}})
+        for reply, said in [((1, error, ""), "devbox was not removed: no machine called devbox"),
+                            ((2, "", "hc: boom\nmore"), "devbox was not removed: hc: boom"),
+                            ((124, "", ""), "devbox was not removed: exit code 124")]:
+            with self.assertRaises(ValueError) as caught:
+                machines.remove_machine(self.paths, "devbox", FakeRunner(probe=reply))
+            self.assertEqual(str(caught.exception), said)
+            self.assertEqual(self.cache.read_bytes(), before)
+
     def test_a_leftover_temp_file_does_not_break_a_save(self):
         self.paths.state.mkdir(parents=True)
         foreign = self.paths.state / ".inventory.leftover.tmp"
@@ -380,6 +414,19 @@ class MachineCliTest(unittest.TestCase):
             code, out, _ = self.run_cli(["machine", "add", "devbox"], FakeRunner())
         self.assertEqual((code, out), (1, ""))
 
+
+    def test_cli_machine_remove(self):
+        runner = FakeRunner(probe=(0, "", ""))
+        code, out, _ = self.run_cli(["machine", "remove", "devbox", "--json"], runner)
+        self.assertEqual((code, json.loads(out)), (0, {"ok": True, "machine": "devbox"}))
+        code, out, _ = self.run_cli(["machine", "remove", "devbox"], runner)
+        self.assertEqual((code, out), (0, "devbox removed from Herdr\n"))
+        code, out, err = self.run_cli(["machine", "remove", "devbox", "--json"], FakeRunner(probe=(1, "", "gone\n")))
+        self.assertEqual((code, out, err), (1, "", "Error: devbox was not removed: gone\n"))
+        runner = FakeRunner()
+        code, _, err = self.run_cli(["machine", "remove", "--", "-x"], runner)
+        self.assertEqual((code, runner.calls), (1, []))
+        self.assertIn("cannot be passed on to hc", err)
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,7 @@ import { harnessRows } from "./harnesses.js";
 import { catalogRows, settle } from "./catalog.js";
 import { loadSessions, startKey, startView } from "./start.js";
 import { connectKey, connectView, openConnect } from "./connect.js";
-import { loadMachines, machinesTab } from "./machines-view.js";
+import { closeMachines, loadMachines, machinesLegend, machinesTab } from "./machines-view.js";
 import { INVENTORY_EXEC, inventoryArgs, remoteChips, remoteStart, whereChoices } from "./machines.js";
 
 const KNOWN = "new-menu.agents";  // mesh-new-menu keeps knownAgents() here, per machine ("" = this one)
@@ -82,6 +82,11 @@ export default class MeshAgents extends View {
       cx.notify();
     });
     this.reload(cx, props()?.agent);
+  }
+
+  // Herdr closes the dialog: an add's answer that still arrives waits for the next Machines tab.
+  close() {
+    if (this.machines) closeMachines(this);
   }
 
   // From the session list to this agent's details: the dialog of "Manage agents…".
@@ -426,13 +431,15 @@ export default class MeshAgents extends View {
       .children(rows.map((r) => this.catalogRow(t, r)));
   }
 
-  addView(t) {
+  // `cx`: render's, for the Machines tab (it reads Herdr's machine list again when Herdr reports a machine ready).
+  addView(t, cx) {
     return v_flex().w_full().flex_1().min_h(0).gap(10)
       .child(h_flex().gap(6).items_center()
         .child(btn("agent-tab-new", t, "New", (_e, cx) => this.showTab("new", cx), { on: this.tab === "new" }))
         .child(btn("agent-tab-moshi", t, "From moshi", (_e, cx) => this.showTab("moshi", cx), { on: this.tab === "moshi" }))
-        .child(btn("agent-tab-machines", t, "Machines", (_e, cx) => this.showTab("machines", cx), { on: this.tab === "machines" })))
-      .child(this.tab === "moshi" ? this.moshiTab(t) : this.tab === "machines" ? machinesTab(this, t) : this.newTab(t));
+        .child(btn("agent-tab-machines", t, "Machines", (_e, cx) => this.showTab("machines", cx), { on: this.tab === "machines" }))
+        .when(this.tab === "machines", (el) => el.child(div().flex_1()).child(machinesLegend(t))))
+      .child(this.tab === "moshi" ? this.moshiTab(t) : this.tab === "machines" ? machinesTab(this, t, cx) : this.newTab(t));
   }
 
   render(cx) {
@@ -451,7 +458,7 @@ export default class MeshAgents extends View {
         .child(v_flex().flex_1().min_h(0).gap(2).overflow_y_scrollbar().children(list.map((a) => this.listRow(t, a))))
         .child(btn("agent-new", t, "+ Agent", (_e, cx) => this.showNew(cx), { on: this.view === "new" })))
       .child(v_flex().flex_1().min_w_0().h_full().p(16).gap(10)
-        .child(v_flex().flex_1().min_h(0).child(this.view === "new" ? this.addView(t) : this.details(t)))
+        .child(v_flex().flex_1().min_h(0).child(this.view === "new" ? this.addView(t, cx) : this.details(t)))
         .when(!!this.error, (el) => el.child(div().text_size(12).text_color(t.blocked).child(this.error)))
         .child(h_flex().w_full().justify_end().child(btn("agents-close", t, "Close", () => closeOverlay(props().overlay)))));
   }

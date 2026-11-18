@@ -137,6 +137,14 @@ def _swap_mod(node: Dict, old: str, new: str) -> None:
         _swap_mod(child, old, new)
 
 
+def _swap_block_mod(node: Dict, block_id: str, old: str, new: str) -> None:
+    """Like _swap_mod, only in the block with id `block_id` (its props stay)."""
+    if node.get("id") == block_id and (node.get("content") or {}).get("mod") == old:
+        node["content"]["mod"] = new
+    for child in node.get("children") or []:
+        _swap_block_mod(child, block_id, old, new)
+
+
 def _add_below_mod(node: Dict, mod: str, block: Dict) -> bool:
     """Puts a copy of `block` right after the block showing `mod`, in the same container."""
     children = node.get("children") or []
@@ -165,6 +173,48 @@ def install_menu_tabs(paths: Paths, backup: BackupStore) -> bool:
     return True
 
 
+def _footer_copy(text: str) -> Optional[str]:
+    """workspace-chrome's main.js with "Add machine" opening our Machines tab; None unless both exact strings (the
+    call and the import line openOverlay joins) are there once."""
+    for old in (CHROME_ADDS_MACHINE, CHROME_IMPORTS):
+        if text.count(old) != 1:
+            return None
+    return text.replace(CHROME_ADDS_MACHINE, CHROME_OPENS_OURS).replace(CHROME_IMPORTS, CHROME_IMPORTS_OURS)
+
+
+def install_footer_chrome(paths: Paths, backup: BackupStore) -> bool:
+    """The sidebar footer's "Add machine" opens herdr's own form by name, so the cockpit layout's footer block gets a
+    copy of the shipped workspace-chrome mod that opens our Machines tab instead (herdr's icons stay referenced where
+    they are). Generated at every install, like mesh-tabs; False if herdr changed either string: the layout then
+    keeps herdr's footer."""
+    source = paths.herdr_mods / "workspace-chrome"
+    try:
+        copy = _footer_copy((source / "main.js").read_text())
+        meta = (source / "mod.json").read_text()
+    except OSError:
+        return False
+    if copy is None:
+        return False
+    backup.write_text(paths.herdr_mods / "mesh-chrome" / "main.js", copy)
+    backup.write_text(paths.herdr_mods / "mesh-chrome" / "mod.json", meta)
+    return True
+
+
+def footer_findings(paths: Paths) -> List[str]:
+    try:
+        chrome = (paths.herdr_mods / "workspace-chrome" / "main.js").read_text()
+    except OSError:
+        if main_layout_ready(paths):
+            return ["Herdr's sidebar footer is missing: the cockpit layout uses Herdr's own footer"]
+        return []
+    copy, ours = _footer_copy(chrome), paths.herdr_mods / "mesh-chrome" / "main.js"
+    if copy is None:
+        return ["Herdr's sidebar footer opens \"Add machine\" in a new way: the cockpit layout uses Herdr's own footer"]
+    if not ours.is_file() or ours.read_text() != copy:
+        return ["Herdr's sidebar footer has changed: moshi-cockpit install updates our copy (mesh-chrome)"]
+    return []
+
+
 def menu_findings(paths: Paths) -> List[str]:
     """Our "+" menu and spaces list are copies of herdr's: when herdr changes an original, the copy needs a look."""
     findings = []
@@ -178,6 +228,7 @@ def menu_findings(paths: Paths) -> List[str]:
         version = shipped.get("main.js") if isinstance(shipped, dict) else None
         if version and version != upstream:
             findings.append(finding)
+    findings.extend(footer_findings(paths))
     try:
         tabs = (paths.herdr_mods / "tabs" / "main.js").read_text()
     except OSError:
@@ -192,7 +243,7 @@ def menu_findings(paths: Paths) -> List[str]:
     return findings
 
 
-def cockpit_layout(main: Dict, own_menu: bool = False) -> Dict:
+def cockpit_layout(main: Dict, own_menu: bool = False, own_footer: bool = False) -> Dict:
     """herdr's shipped `main` layout with "Your agents" below Spaces and Agents, our spaces list (mesh-spaces)
     instead of herdr's and without the files/changes panel. Shipped layouts are read-only and replaced on every
     start, so ours is a separate file derived from the current one; `main` keeps herdr's spaces."""
@@ -200,6 +251,8 @@ def cockpit_layout(main: Dict, own_menu: bool = False) -> Dict:
     _swap_mod(layout, "spaces", "mesh-spaces")
     if own_menu:
         _swap_mod(layout, "tabs", "mesh-tabs")
+    if own_footer:  # only the footer: the brand block at the top shows the same mod
+        _swap_block_mod(layout, FOOTER_BLOCK, "workspace-chrome", "mesh-chrome")
     _add_below_mod(layout, "agents", OWN_AGENTS_BLOCK)
     layout["derived_from"] = "main (moshi-cockpit)"
     return layout
@@ -217,7 +270,8 @@ def install_cockpit_layout(paths: Paths, backup: BackupStore) -> str:
     main = load_json(paths.herdr_app_home / "layouts" / "main.json")
     target = paths.herdr_app_home / "layouts" / f"{COCKPIT_LAYOUT}.json"
     own_menu = install_menu_tabs(paths, backup)
-    layout = cockpit_layout(main, own_menu)
+    own_footer = install_footer_chrome(paths, backup)
+    layout = cockpit_layout(main, own_menu, own_footer)
     changed = backup.write_text(target, json.dumps(layout, indent=2) + "\n")
     note = "Cockpit layout (Your agents in the sidebar): " + ("created or updated" if changed else "unchanged")
     if OWN_AGENTS_BLOCK["id"] not in json.dumps(layout):
@@ -227,6 +281,12 @@ def install_cockpit_layout(paths: Paths, backup: BackupStore) -> str:
 
 TABS_OPENS_MENU = 'openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })'
 TABS_OPENS_OURS = 'openOverlay({ mod: "mesh-new-menu", kind: "popup", width: 250, height: 640 })'
+FOOTER_BLOCK = "sidebar-footer"
+CHROME_ADDS_MACHINE = 'run("mod.open", { name: "machine-add" })'
+CHROME_OPENS_OURS = ('openOverlay({ mod: "mesh-agents", kind: "dialog", width: 640, height: 460, '
+                     'props: { view: "new", tab: "machines" } })')
+CHROME_IMPORTS = 'import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";'
+CHROME_IMPORTS_OURS = 'import { theme, run, props, window, shared, setShared, updates, layout, openOverlay } from "herdr";'
 NEW_MENU_UPSTREAM = "2f13095cb116c3cf"  # installed.json of the herdr-app our mesh-new-menu was copied from
 SPACES_UPSTREAM = "bbcc823778bd7475"  # installed.json of the herdr-app our mesh-spaces was copied from
 MOD_SUFFIXES = {".js", ".json", ".svg", ".png"}

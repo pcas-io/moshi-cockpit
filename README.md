@@ -98,10 +98,11 @@ Each agent's Vibe profile (`config.toml`) is written by the cockpit: hand edits 
 
 ## Machines
 
-The "+" menu has a row **Machine…** (below "Manage agents…"); it opens "+ Agent" on the **Machines** tab. The
+The "+" menu has a row **Machine…** (below "Manage agents…"); it opens "+ Agent" on the **Machines** tab. In the
+cockpit layout, **Add machine** in the sidebar footer opens the Machines tab too (instead of Herdr's own form). The
 tab is a compact grid: one row per machine (this Mac first, then each machine of Herdr's machine list), one
 column per harness (`claude`, `codex`, `vibe`, `agy`, `grok` and `opencode`). Each cell shows one of three states,
-as the legend above the grid says:
+as the legend next to the tab buttons says:
 
 - **● Ready:** found, and signed in.
 - **◐ Sign in** (installed, not signed in): found, and not signed in or not known to be (not every vendor offers
@@ -119,7 +120,8 @@ Clicking a cell does what its symbol says (its tooltip names the state):
   `opencode auth login`.
 
 A machine that is not connected, or that Herdr is still connecting to, shows a short note in its row instead
-of the cells. Under the grid you add machines without a terminal. Herdr's own "Add a machine" can't answer ssh's
+of the cells. The **×** at a machine's row end removes it from Herdr (`hc machine rm`) after you confirm; its
+terminals keep running there, and a saved target stays as a chip to add it again. Under the grid you add machines without a terminal. Herdr's own "Add a machine" can't answer ssh's
 questions (host key, password, installing herdr-core), so the tab does it:
 
 - **Chips.** "From ~/.ssh/config" lists the hosts Herdr does not know yet, "Saved" the targets you typed earlier
@@ -141,8 +143,9 @@ questions (host key, password, installing herdr-core), so the tab does it:
 The inventory is asked when the tab opens (a machine checked less than a minute ago is shown from the cache),
 after `machine add`, and when you press **Refresh** next to the time a machine was last checked. Nothing polls. A
 machine that does not answer shows one error line and keeps its last good result in the cache. Machines that are
-not connected are listed and checked the next time the Machines tab opens after they are; nothing re-checks them
-on its own.
+not connected are listed and checked once Herdr reports them connected while the tab is open, or the next time it
+opens. A machine added a moment ago says that Herdr is still starting herdr-core there; if the dialog closed
+during an add, the next Machines tab shows how it ended.
 
 ## Spaces
 
@@ -199,6 +202,7 @@ and activation is skipped.
 | `machine inventory [--on NAME] [--refresh] [--json]` | The six agent CLIs on this Mac, or on the machine `NAME` from `machine list`, each Ready, Installed, not signed in, or Missing. A result younger than a minute comes from the cache; `--refresh` asks again. |
 | `machine add ALIAS` | Add an ssh host (a `Host` from `~/.ssh/config`, `user@host` or `user@host:port`) to Herdr with `hc machine add`, attached to your terminal, then show its inventory. |
 | `machine add TARGET --batch [--json]` | The same without a terminal (the Machines tab): saves the target, installs herdr-core there without asking and answers with the new machine's inventory, or that it needs a password or a host key. |
+| `machine remove NAME [--json]` | Remove a machine from Herdr with `hc machine rm`; its terminals keep running there. Your saved hosts stay. |
 | `machine hosts add\|remove TARGET` | Add a target to your saved hosts, or forget it. |
 | `machine hostkey TARGET [--json]` | Whether the host's key is in `~/.ssh/known_hosts`, else the keys it offers with their SHA256 fingerprints; a host with ssh settings the dialog doesn't handle gets `needs: "tab"` instead. |
 | `machine trust TARGET --type TYPE --fingerprint SHA256:… [--json]` | Check the host's key again and add it to `~/.ssh/known_hosts` only if type and fingerprint still match. |

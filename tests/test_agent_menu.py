@@ -194,6 +194,95 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
         self.assertEqual((agent["connected"], agent["has_moshi_token"]), (False, True))
 
 
+class OwnFooterTest(unittest.TestCase):  # the sidebar footer's "Add machine" of the cockpit layout opens our Machines tab
+    IMPORT = 'import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";\n'
+    ROW = ('      .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })));\n'
+           '      .child(svg(`mods/workspace-chrome/${icon}.svg`).size(14))\n')
+    MAIN = {"type": "row", "children": [{"id": "sidebar", "type": "column", "children": [
+        {"id": "brand", "type": "block", "content": {"mod": "workspace-chrome"}},
+        {"id": "sidebar-lists", "type": "column", "children": [{"id": "agents", "content": {"mod": "agents"}}]},
+        {"id": "sidebar-footer", "type": "block", "content": {"mod": "workspace-chrome", "props": {"footer": True}}}]}]}
+
+    def ctx(self, text=IMPORT + ROW):
+        ctx, _ = context(self)
+        chrome = ctx.paths.herdr_mods / "workspace-chrome"
+        chrome.mkdir(parents=True)
+        (chrome / "mod.json").write_text('{ "place": "none" }')
+        if text is not None:
+            (chrome / "main.js").write_text(text)
+        return ctx
+
+    def test_the_footer_copy_opens_our_machines_tab_and_keeps_herdrs_icons(self):
+        from cockpit import defaults
+        ctx = self.ctx()
+        self.assertTrue(defaults.install_footer_chrome(ctx.paths, ctx.backup))
+        ours = ctx.paths.herdr_mods / "mesh-chrome"
+        copy = (ours / "main.js").read_text()
+        self.assertIn('openOverlay({ mod: "mesh-agents", kind: "dialog", width: 640, height: 460, '
+                      'props: { view: "new", tab: "machines" } })', copy)
+        self.assertIn("updates, layout, openOverlay } from \"herdr\";", copy)
+        self.assertNotIn('"machine-add"', copy)
+        self.assertIn("mods/workspace-chrome/${icon}.svg", copy)  # Herdr's own assets, nothing copied
+        self.assertEqual(sorted(p.name for p in ours.iterdir()), ["main.js", "mod.json"])
+        self.assertEqual((ours / "mod.json").read_text(), '{ "place": "none" }')
+
+    def test_no_copy_when_herdr_changed_either_string(self):
+        from cockpit import defaults
+        for changed in (self.ROW, self.IMPORT, self.IMPORT + self.ROW * 2, self.IMPORT * 2 + self.ROW, None):
+            ctx = self.ctx(changed)
+            self.assertFalse(defaults.install_footer_chrome(ctx.paths, ctx.backup))
+            self.assertFalse((ctx.paths.herdr_mods / "mesh-chrome").exists())
+
+    def test_the_cockpit_layout_swaps_only_the_footer_block(self):
+        from cockpit import defaults
+        before = json.dumps(self.MAIN)
+        layout = defaults.cockpit_layout(self.MAIN, own_footer=True)
+        sidebar = layout["children"][0]["children"]
+        self.assertEqual(sidebar[0]["content"], {"mod": "workspace-chrome"})  # the brand block stays Herdr's
+        self.assertEqual(sidebar[-1]["content"], {"mod": "mesh-chrome", "props": {"footer": True}})
+        self.assertEqual(defaults.cockpit_layout(self.MAIN)["children"][0]["children"][-1]["content"]["mod"],
+                         "workspace-chrome")
+        self.assertEqual(json.dumps(self.MAIN), before)  # main untouched
+
+    def test_install_uses_the_copy_in_the_cockpit_layout_and_uninstall_takes_it_back(self):
+        from cockpit import defaults
+        ctx = self.ctx()
+        layouts = ctx.paths.herdr_app_home / "layouts"
+        layouts.mkdir()
+        (layouts / "main.json").write_text(json.dumps(self.MAIN))
+        defaults.install_cockpit_layout(ctx.paths, ctx.backup)
+        cockpit = json.loads((layouts / "cockpit.json").read_text())
+        self.assertEqual(cockpit["children"][0]["children"][-1]["content"]["mod"], "mesh-chrome")
+        self.assertEqual(json.loads((layouts / "main.json").read_text()), self.MAIN)
+        ctx.backup.restore_all()
+        self.assertEqual(list((ctx.paths.herdr_mods / "mesh-chrome").iterdir()), [])
+        self.assertFalse((layouts / "cockpit.json").exists())
+
+    def test_doctor_notices_a_footer_left_behind_by_a_herdr_update(self):
+        from cockpit import defaults
+        ctx = self.ctx()
+        chrome = ctx.paths.herdr_mods / "workspace-chrome" / "main.js"
+        changed = "Herdr's sidebar footer has changed: moshi-cockpit install updates our copy (mesh-chrome)"
+        self.assertEqual(defaults.menu_findings(ctx.paths), [changed])  # never generated
+        defaults.install_footer_chrome(ctx.paths, ctx.backup)
+        self.assertEqual(defaults.menu_findings(ctx.paths), [])
+        chrome.write_text("// new\n" + self.IMPORT + self.ROW)
+        self.assertEqual(defaults.menu_findings(ctx.paths), [changed])
+        chrome.write_text(self.IMPORT + "add machine differently")
+        self.assertIn("Herdr's own footer", defaults.menu_findings(ctx.paths)[0])
+        chrome.unlink()
+        self.assertEqual(defaults.menu_findings(ctx.paths), [])  # Herdr never ran: nothing to miss yet
+        layouts = ctx.paths.herdr_app_home / "layouts"
+        layouts.mkdir()
+        (layouts / "main.json").write_text(json.dumps(self.MAIN))
+        self.assertTrue(any("sidebar footer is missing" in f for f in defaults.menu_findings(ctx.paths)))
+
+    def test_mesh_chrome_is_allowed(self):
+        from cockpit import defaults
+        ctx = self.ctx()
+        defaults.install_footer_chrome(ctx.paths, ctx.backup)
+        self.assertNotIn("mesh-chrome", defaults.unknown_mods(ctx.paths))
+
 class ShellStartTest(unittest.TestCase):  # a wrapper in the person's shell (start menu) must still run
     def run_it(self, name, shell=None, terminal=True):
         ctx, _ = context(self, {("moshi-research", "research"): OWN, ("ocellio-research", "research"): OWN,

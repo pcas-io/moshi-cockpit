@@ -1,9 +1,9 @@
 // The Machines tab of "+ Agent": machine rows, harness actions and the tabs they open. Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COLUMNS, GLYPH, HERDR_KEYS, INVENTORY_EXEC, LEGEND, STATE_TEXT, addHostCommand, cellAction, connectingNote, harnessAction,
-         hostRows, inventoryArgs, layoutReady, machineRows, matrixRow, passable, remoteChips, remoteStart, tabCommand,
-         typedTarget, whereChoices }
+import { COLUMNS, GLYPH, HERDR_KEYS, INVENTORY_EXEC, LEGEND, REMOVE_EXEC, STATE_TEXT, addHostCommand, cellAction, connectingNote,
+         connectingText, harnessAction, hostRows, inventoryArgs, layoutReady, machineRemoveArgs, machineRows, matrixRow, passable,
+         remoteChips, remoteStart, removeQuestion, tabCommand, typedTarget, whereChoices }
   from "../../share/herdr-mods/mesh-agents/machines.js";
 import { readFileSync } from "node:fs";
 
@@ -39,10 +39,10 @@ test("machine rows put this Mac first and explain disconnected machines", () => 
                                         { name: "build-1", state: "needs_login", target: "me@build-1" }],
                              ssh_hosts: [] });
   assert.equal(rows.length, 3);
-  assert.deepEqual(rows[0], { name: null, label: "This Mac", connected: true, note: "" });
-  assert.deepEqual(rows[1], { name: "devbox", label: "devbox", connected: true, note: "" });
+  assert.deepEqual(rows[0], { name: null, label: "This Mac", connected: true, note: "", removable: false, connecting: false });
+  assert.deepEqual(rows[1], { name: "devbox", label: "devbox", connected: true, note: "", removable: true, connecting: false });
   assert.deepEqual(rows[2], { name: "build-1", label: "build-1", connected: false,
-                              note: "needs login: inventory once it is connected" });
+                              note: "needs login: inventory once it is connected", removable: true, connecting: false });
   // no list (Herdr's machine list was not available): this Mac alone
   assert.deepEqual(machineRows(null).map((r) => r.label), ["This Mac"]);
   assert.deepEqual(machineRows({ machines: [], problem: "x" }).map((r) => r.label), ["This Mac"]);
@@ -56,6 +56,7 @@ test("machine rows put this Mac first and explain disconnected machines", () => 
     const [, odd] = machineRows({ machines: [{ name, state: "connected" }] });
     assert.equal(odd.connected, false, name);
     assert.equal(odd.note, "name not supported", name);
+    assert.equal(odd.removable, false, name);  // never reaches `machine remove` either
   }
   assert.equal(machineRows({ machines: [{ name: "x\u001b[2Jy", state: "connected" }] })[1].label, "x [2Jy");
 });
@@ -328,4 +329,29 @@ test("matrix row: no curl there leaves the missing cells empty and says so in th
   const r = matrixRow({ name: "build-1", label: "build-1", connected: true, note: "" }, inv(harnesses), true, ago);
   assert.deepEqual(r.cells.map((c) => c.show), ["ready", "sign-in", null, null, null, null]);
   assert.equal(r.status, "needs curl \u00b7 checked ago(T)");
+});
+
+test("a machine just added says it is connecting, offers Refresh, and only while it is not connected", () => {
+  const list = { machines: [{ name: "devbox", state: "unreachable" }, { name: "build-1", state: "connected" },
+                            { name: "lab-2", state: "unreachable" }] };
+  const rows = machineRows(list, new Set(["devbox", "build-1"]));
+  assert.deepEqual(rows[1], { name: "devbox", label: "devbox", connected: false, note: connectingText("devbox"),
+                              removable: true, connecting: true });
+  assert.equal(connectingText("devbox"), "Connecting: Herdr is starting herdr-core on devbox. This can take a minute or two; "
+                                         + "the row fills in by itself once it answers.");
+  assert.equal(rows[2].connecting, false);  // connected already: the inventory shows
+  assert.equal(rows[3].note, "unreachable: inventory once it is connected");  // not added a moment ago
+  const r = matrixRow(rows[1], undefined, false, ago);
+  assert.deepEqual([r.note, r.refresh, r.cells], [connectingText("devbox"), true, []]);
+  assert.equal(matrixRow(rows[3], undefined, false, ago).refresh, false);
+});
+
+test("removing a machine asks first and passes only a checked name", () => {
+  assert.equal(removeQuestion("devbox"), "Remove devbox from Herdr? Its terminals keep running there.");
+  assert.deepEqual(machineRemoveArgs("devbox"), ["machine", "remove", "devbox", "--json"]);
+  const py = readFileSync(new URL("../../cockpit/machines.py", import.meta.url), "utf8");
+  const guard = Number(py.match(/^REMOVE_TIMEOUT = (\d+)/m)[1]);
+  assert.ok(REMOVE_EXEC.timeout > guard * 1000, `${REMOVE_EXEC.timeout} > ${guard * 1000}`);
+  const view = readFileSync(new URL("../../share/herdr-mods/mesh-agents/machines-view.js", import.meta.url), "utf8");
+  assert.match(view, /machineRemoveArgs\([^)]*\), true, REMOVE_EXEC\)/);
 });

@@ -1,4 +1,4 @@
-"""`moshi-cockpit machine list | inventory | add`: the machines Herdr reaches over ssh and the agent CLIs on each.
+"""`moshi-cockpit machine list | inventory | add | remove`: the machines Herdr reaches over ssh and the agent CLIs on each.
 
 Every machine name or ssh alias that reaches hc's argv passes `check_target` first: nothing that hc could read
 as an option, no spaces, no shell characters. The probe is `inventory.probe_script()`, static; its states are
@@ -33,6 +33,7 @@ LIST_TIMEOUT = 15
 PROBE_TIMEOUT = 45  # the runner's guard; hc's own --timeout for the remote program is shorter
 REMOTE_TIMEOUT = "30"
 CACHE_SECONDS = 60
+REMOVE_TIMEOUT = 30  # `hc machine rm`: Herdr forgets the machine; its terminals keep running there
 ADD_TIMEOUT = 120  # `machine add --batch`: hc dials, copies itself there and checks that it answers
 # add_batch's worst case: ls, add, ls, probe (the mod's exec waits longer: ADD_EXEC in machines.js, tested)
 ADD_WORST = LIST_TIMEOUT + ADD_TIMEOUT + LIST_TIMEOUT + PROBE_TIMEOUT
@@ -149,15 +150,19 @@ def _valid(entry: object) -> bool:
             and all(states.get(name) in STATE_TEXT for name in KNOWN))
 
 
-def _store(paths: Paths, key: str, entry: Dict) -> None:
-    """Merges one machine's entry into the cache. Inventories of several machines run in parallel: the lock
-    keeps load, merge and save of one from losing another's entry; each writer has a temp file of its own."""
+def _store(paths: Paths, key: str, entry: Optional[Dict]) -> None:
+    """Merges one machine's entry into the cache, or drops it (`entry` None). Inventories of several machines run
+    in parallel: the lock keeps load, merge and save of one from losing another's entry; each writer has a temp
+    file of its own."""
     paths.state.mkdir(parents=True, exist_ok=True)
     lock = os.open(str(paths.state / LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         cache = {k: v for k, v in _load_cache(paths).items() if _valid(v)}
-        cache[key] = entry
+        if entry is None:
+            cache.pop(key, None)
+        else:
+            cache[key] = entry
         fd, tmp = tempfile.mkstemp(dir=str(paths.state), prefix=".inventory.", suffix=".tmp")  # 0600
         try:
             with os.fdopen(fd, "w") as handle:
@@ -214,6 +219,21 @@ def inventory(paths: Paths, machine: Optional[str], runner: Runner, refresh: boo
     checked = datetime.fromtimestamp(entry["at"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"machine": machine, "checked_at": checked, "cached": cached, "has_curl": entry["has_curl"],
             "harnesses": [_row(paths, name, entry["states"][name], machine, entry["has_curl"]) for name in KNOWN]}
+
+
+def remove_machine(paths: Paths, name: str, runner: Runner) -> Dict:
+    """`hc machine rm`: Herdr forgets the machine, its terminals keep running there. Its cached inventory goes too;
+    the saved host (hosts.json) stays, so it can be added again. ValueError with one line when hc refuses."""
+    check_target(name)
+    code, out, err = runner([_hc(paths), "machine", "rm", "--", name], REMOVE_TIMEOUT)
+    if code != 0:
+        message = clean(str(_hc_error(out, err).get("message") or ""), "", limit=300)
+        raise ValueError(f"{name} was not removed: {message or _first_line(err) or _first_line(out) or f'exit code {code}'}")
+    try:
+        _store(paths, name, None)
+    except OSError:
+        pass  # Herdr has forgotten it; a stale cache entry only lives a minute
+    return {"ok": True, "machine": name}
 
 
 def _added_name(alias: str, before: Optional[Set[str]], after: List[Dict]) -> Optional[str]:
