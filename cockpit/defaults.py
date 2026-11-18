@@ -261,21 +261,14 @@ def ensure_claude_launcher(paths: Paths, backup: BackupStore, environ: Mapping[s
     return "Herdr menu, claude: starts through your shell" + ("" if changed else ", unchanged")
 
 
-ICON_DIR = "mesh-icons"
-VIBE_ICON = f"{ICON_DIR}/vibe.svg"
-VIBE_STANDARD = {"name": "Vibe", "icon": VIBE_ICON, "tint": True, "run": ["vibe", "--agent", "ask"]}
-
-
-def install_icons(paths: Paths, backup: BackupStore) -> List[str]:
-    """Our icons (share/herdr-icons/) into herdr's home, where programs.json refers to them."""
-    target = paths.herdr_app_home / ICON_DIR
-    return [f.name for f in sorted((SHARE / "herdr-icons").glob("*.svg"))
-            if backup.write_text(target / f.name, f.read_text())]
+# Earlier releases shipped a Vibe icon under herdr's home ("mesh-icons/vibe.svg"); an entry pointing there is ours.
+EARLIER_VIBE_ICON = "mesh-icons/vibe.svg"
+VIBE_STANDARD = {"name": "Vibe", "run": ["vibe", "--agent", "ask"]}  # no icon: the package ships no images
 
 
 def ensure_vibe_entry(paths: Paths, backup: BackupStore) -> str:
-    """herdr ships no Vibe: this adds it to "Start a standard agent". An entry with our icon counts as ours and is
-    updated; any other entry for it stays."""
+    """herdr ships no Vibe: this adds it to "Start a standard agent". An entry with the icon of an earlier release
+    counts as ours and is updated; any other entry for it stays."""
     from cockpit.harnesses import HARNESSES
     target = paths.herdr_app_home / "programs.json"
     if target.exists() and not load_json(target):
@@ -287,7 +280,7 @@ def ensure_vibe_entry(paths: Paths, backup: BackupStore) -> str:
     current = programs.get("vibe")
     if current == VIBE_STANDARD:
         return "Herdr menu, Vibe: unchanged"
-    ours = isinstance(current, dict) and current.get("icon") == VIBE_ICON  # written by an earlier install
+    ours = isinstance(current, dict) and current.get("icon") == EARLIER_VIBE_ICON  # written by an earlier install
     if current is not None and not ours:
         return "Herdr menu, Vibe: your own entry in programs.json stays"
     if current is None and not HARNESSES["vibe"].installed(paths):
@@ -297,9 +290,9 @@ def ensure_vibe_entry(paths: Paths, backup: BackupStore) -> str:
     return "Herdr menu, Vibe: added under \"Start a standard agent\""
 
 
-# herdr's own icons for the harnesses that have one, ours for Vibe (herdr ships none).
+# herdr's own icons for the harnesses that have one; Vibe has none (herdr ships none, this package ships no images).
 MENU_ICONS = {"claude": "icons/claude.svg", "codex": "icons/codex.svg", "grok": "icons/grok.svg",
-              "agy": "icons/antigravity.svg", "vibe": VIBE_ICON}
+              "agy": "icons/antigravity.svg"}
 PROGRAMS_BROKEN = "Herdr menu: skipped, programs.json has an unexpected format (not overwritten)"
 MENU_PREFIX = "moshi-cockpit-"  # our entries in programs.json: only these are ever removed
 
@@ -322,8 +315,6 @@ def sync_agent_menu(paths: Paths, backup: BackupStore) -> str:
         entry = {"name": label, "run": [str(paths.local_bin / "moshi-cockpit"), "run", agent.name]}
         if agent.harness in MENU_ICONS:
             entry["icon"] = MENU_ICONS[agent.harness]
-        if MENU_ICONS.get(agent.harness) == VIBE_ICON:
-            entry["tint"] = True  # one color, drawn in the theme's text color
         wanted[MENU_PREFIX + agent.name] = entry
     programs = data.setdefault("programs", {})
     if not isinstance(programs, dict):

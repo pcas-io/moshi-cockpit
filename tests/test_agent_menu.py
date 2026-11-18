@@ -32,7 +32,7 @@ class AgentMenuTest(unittest.TestCase):  # one entry per agent in herdr's "+" me
         self.assertEqual(entry["run"], [str(ctx.paths.local_bin / "moshi-cockpit"), "run", "claude-code"])
         self.assertEqual(entry["icon"], "icons/claude.svg")
         self.assertEqual(programs["moshi-cockpit-g1"]["name"], "g1 (no moshi identity of its own)")
-        self.assertEqual((programs["moshi-cockpit-v1"]["icon"], programs["moshi-cockpit-v1"]["tint"]), ("mesh-icons/vibe.svg", True))
+        self.assertNotIn("icon", programs["moshi-cockpit-v1"])  # the package ships no images
 
     def test_without_moshi_nothing_is_marked_and_no_token_is_ever_written(self):
         ctx, target = self.ctx([{"name": "g1", "harness": "grok"}], servers={})
@@ -192,7 +192,7 @@ class ShellStartTest(unittest.TestCase):  # a wrapper in the person's shell (sta
                 self.assertNotIn("MOSHI_COCKPIT_RUN", seen["env"])
 
 
-class VibeStandardEntryTest(unittest.TestCase):  # herdr ships no Vibe: "Start a standard agent" gets one, with an icon
+class VibeStandardEntryTest(unittest.TestCase):  # herdr ships no Vibe: "Start a standard agent" gets one
     def setup(self, existing=None, installed=True):
         from cockpit.harnesses import HARNESSES
         patcher = mock.patch.object(type(HARNESSES["vibe"]), "installed", return_value=installed)
@@ -212,11 +212,11 @@ class VibeStandardEntryTest(unittest.TestCase):  # herdr ships no Vibe: "Start a
         self.assertIn("unchanged", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         programs = json.loads(target.read_text())["programs"]
         self.assertEqual(programs["claude"], {"name": "My Claude"})
-        self.assertEqual((programs["vibe"]["run"], programs["vibe"]["icon"]), (["vibe", "--agent", "ask"], "mesh-icons/vibe.svg"))
+        self.assertEqual(programs["vibe"], {"name": "Vibe", "run": ["vibe", "--agent", "ask"]})
 
     def test_an_entry_from_an_earlier_install_is_updated(self):
         from cockpit import defaults
-        ctx, target = self.setup(json.dumps({"programs": {"vibe": {"icon": defaults.VIBE_ICON, "run": ["vibe"]}}}))
+        ctx, target = self.setup(json.dumps({"programs": {"vibe": {"icon": defaults.EARLIER_VIBE_ICON, "tint": True, "run": ["vibe"]}}}))
         self.assertIn("added", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         self.assertEqual(json.loads(target.read_text())["programs"]["vibe"], defaults.VIBE_STANDARD)
 
@@ -236,11 +236,13 @@ class VibeStandardEntryTest(unittest.TestCase):  # herdr ships no Vibe: "Start a
         self.assertIn("skipped", defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
         self.assertEqual(target.read_text(), "{ kaputt")
 
-    def test_the_icon_lands_where_the_entry_points(self):
-        from cockpit import defaults
-        ctx, _ = self.setup()
-        self.assertEqual(defaults.install_icons(ctx.paths, ctx.backup), ["vibe.svg"])
-        self.assertIn("<svg", (ctx.paths.herdr_app_home / defaults.VIBE_STANDARD["icon"]).read_text())
+    def test_the_package_ships_no_images(self):
+        from cockpit.defaults import SHARE
+        root = SHARE.parent
+        images = [p for p in root.rglob("*") if p.suffix.lower() in
+                  {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".icns", ".bmp", ".tif", ".tiff"}
+                  and ".git" not in p.parts and "dist" not in p.parts]
+        self.assertEqual(images, [])
 
 
 class ClaudeMenuEntryTest(unittest.TestCase):  # herdr's own "Claude Code" button goes through the shell too

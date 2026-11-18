@@ -32,6 +32,7 @@ Exec = Callable[[str, List[str], dict], None]
 SHELLS = ("zsh", "bash")
 RUN_MARKER = "MOSHI_COCKPIT_RUN"
 UNREACHABLE = "moshi is not reachable; starting without the mesh."
+TAKEN_IN_BETWEEN = "{name} was held by {label} until just now: it was started there after the check, and runs here now."
 
 
 class ActiveElsewhere(RuntimeError):
@@ -67,7 +68,9 @@ def claim(paths: Paths, keychain: SecretStore, name: str, take_over: bool = Fals
         if holder["active"] and not holder["here"] and not take_over:
             if not (confirm and confirm(holder["active"])):
                 raise ActiveElsewhere(holder["active"])
-        api.activate(moshi_token(paths, keychain, agent.name, url))
+        previous = api.activate(moshi_token(paths, keychain, agent.name, url))
+        if previous is not None and previous not in (holder["active"], holder.get("own")):
+            warn(TAKEN_IN_BETWEEN.format(name=agent.name, label=previous))
     except MoshiError as exc:
         if status.unreachable(exc):
             warn(UNREACHABLE)

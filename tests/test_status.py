@@ -197,6 +197,21 @@ class RunTakeoverTest(ConnectedHerdr, unittest.TestCase):
         self.assertEqual(len(self.moshi.calls("POST", "/api/agent/activate")), 1)
         started.assert_called_once()
 
+    def test_a_takeover_between_the_check_and_the_start_is_named(self):
+        self.moshi.agent("scout")["active_installation_id"] = self.other["id"]  # started there after the check
+        with mock.patch.object(status, "where", return_value={"active": None, "here": False, "own": "Work Mac"}):
+            code, out, err, started = self.run_cli("scout")
+        self.assertEqual((code, out), (0, ""), err)
+        self.assertIn("scout was held by Home Mac until just now", err)
+        self.assertEqual(self.holder(), self.installation["id"])
+        started.assert_called_once()
+
+    def test_a_confirmed_takeover_is_not_named_again(self):
+        self.moshi.agent("scout")["active_installation_id"] = self.other["id"]
+        code, _, err, _ = self.run_cli("scout", "--take-over")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("until just now", err)
+
     def test_run_starts_the_agent_when_moshi_is_unreachable(self):
         self.api = closed_port_api()
         code, out, err, started = self.run_cli("scout", "exec")

@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
-USER_AGENT = "moshi-cockpit/0.1"
+from cockpit import __version__
+
+USER_AGENT = f"moshi-cockpit/{__version__}"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHARE = REPO_ROOT / "share"

@@ -163,7 +163,7 @@ Then:
 
 1. `moshi-cockpit connect` (or "Connect to moshi…" in Herdr), approve in the browser.
 2. `moshi-cockpit migrate` adopts each agent's earlier token for this installation. The tokens themselves
-   stay; the old helper entries go. Run it again at any time: it only reports what was moved already.
+   stay; the old helper entries go. Run it again at any time: agents that are already on this installation are reported as such.
 3. In the moshi dashboard, revoke the old helper identities.
 
 Until you have connected, agents do not start and the command exits with `3`. Agents whose harness runs

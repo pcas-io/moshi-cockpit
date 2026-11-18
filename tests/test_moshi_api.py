@@ -256,6 +256,11 @@ class MoshiApiTest(unittest.TestCase):
 
 
 class HelpersTest(unittest.TestCase):
+    def test_the_user_agent_names_this_release(self):
+        import cockpit
+        from cockpit.paths import USER_AGENT
+        self.assertEqual(USER_AGENT, f"moshi-cockpit/{cockpit.__version__}")
+
     def test_moshi_base_is_the_origin(self):
         cases = {"https://moshi.example/mcp": "https://moshi.example",
                  "https://moshi.example/mcp/": "https://moshi.example",

@@ -79,8 +79,8 @@ def read_mesh(paths, config: Config, keychain: SecretStore, api: Optional[MoshiA
 
 
 def where(paths, config: Config, keychain: SecretStore, name: str, api: Optional[MoshiApi] = None) -> Dict[str, Any]:
-    """`{"active": label | None, "here": bool}`: the installation that holds the agent, and whether that is
-    this one. moshi names installations by label only, so two with the same label look alike. Raises
+    """`{"active": label | None, "here": bool, "own": label | None}`: the installation that holds the agent,
+    whether that is this one, and this installation's label. moshi names installations by label only, so two with the same label look alike. Raises
     ApprovalRequired without a usable device key, MoshiError when moshi gives no answer."""
     url = require(config, "moshi")
     key = device_key(paths, config, keychain)
@@ -95,7 +95,7 @@ def where(paths, config: Config, keychain: SecretStore, name: str, api: Optional
     found = next((a for a in mesh.agents if a["name"].lower() == name.lower()), None)
     active = found["active_installation"] if found else None
     own = (mesh.installation or {}).get("label")
-    return {"active": active, "here": active is not None and active == own}
+    return {"active": active, "here": active is not None and active == own, "own": own}
 
 
 def local_agents(paths, config, keychain: SecretStore) -> List[Dict]:

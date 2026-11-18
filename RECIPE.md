@@ -5,8 +5,6 @@ with each of your own agents and whether it is online in moshi. A "+ Agent" dial
 that exists in moshi or installs a missing agent CLI, and starting an agent that runs on another computer asks
 before it takes it over.
 
-![moshi-cockpit](preview.png)
-
 ## What you see
 
 The cockpit layout is Herdr's own `main` layout with two changes: the files and changes panel is removed, and a
@@ -62,7 +60,7 @@ fixed pane), and the layout `cockpit.json`, written by `moshi-cockpit install` f
   `keys`, `knownAgents`, `shared`/`setShared`, `notify`, `openOverlay`, `closeOverlay`, and `run` with
   `tab.new` (for `run`, `connect`, `harness install` and the standard agents), `agent.focus` and `space.new`.
 - Programs it runs: only `~/.local/bin/moshi-cockpit`, which is the command line tool in this repository.
-- Art: the icon for the Vibe harness in `share/herdr-icons/`.
+- Art: none. The package ships no images; the Vibe entry has no icon.
 - Install: `curl -fsSL https://github.com/pcas-io/moshi-cockpit/releases/latest/download/install.sh | sh`
   copies the mods and the layout; then open Herdr and switch to the `cockpit` layout.
 
@@ -76,4 +74,3 @@ fixed pane), and the layout `cockpit.json`, written by `moshi-cockpit install` f
 - The cockpit layout is generated from Herdr's `main` layout at install time. If a later Herdr changes `main`,
   run `moshi-cockpit install` again.
 - moshi and ocellio are optional. Without moshi there is no presence and no takeover; agents start locally.
-- The `preview.png` referenced above is added with the first release.
