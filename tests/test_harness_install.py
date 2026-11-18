@@ -6,6 +6,7 @@ from unittest import mock
 from cockpit import cli, harness_install
 from cockpit.harness_install import INSTALL, InstallIO, InstallSpec
 from cockpit.harnesses import HARNESSES
+from cockpit.inventory import KNOWN
 from tests.helpers import temp_paths
 
 
@@ -36,30 +37,31 @@ class HarnessInstallTest(unittest.TestCase):
     def setUp(self):
         self.paths = temp_paths(self)
         # installed() looks at PATH too: this machine's own binaries must not count
-        patch = mock.patch("cockpit.harnesses.base.shutil.which", return_value=None)
+        patch = mock.patch("cockpit.inventory.shutil.which", return_value=None)
         patch.start()
         self.addCleanup(patch.stop)
-        self.harness = HARNESSES["codex"]
+        self.name = "codex"
         self.spec = INSTALL["codex"]
-        self.binary = self.paths.local_bin / self.harness.binary
+        self.binary = self.paths.local_bin / "codex"
 
     def appear(self):
         self.binary.parent.mkdir(parents=True, exist_ok=True)
         self.binary.write_text("#!/bin/sh\n")
 
     def go(self, session, runner, which=lambda tool: "/usr/bin/" + tool):
-        return harness_install.install(self.harness, session.io, runner, self.paths, which=which)
+        return harness_install.install(self.name, session.io, runner, self.paths, which=which)
 
     def test_commands_and_sources_are_the_pinned_vendor_ones(self):
-        self.assertEqual(set(INSTALL), set(HARNESSES))
+        self.assertEqual(set(INSTALL), set(KNOWN))
         self.assertEqual({n: sp.argv[2] for n, sp in INSTALL.items()}, {
             "claude": "curl -fsSL https://claude.ai/install.sh | bash",
             "codex": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
             "vibe": "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
             "agy": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-            "grok": "curl -fsSL https://x.ai/cli/install.sh | bash"})
+            "grok": "curl -fsSL https://x.ai/cli/install.sh | bash",
+            "opencode": "curl -fsSL https://opencode.ai/v2/install | bash"})
         prefixes = ("https://code.claude.com/", "https://github.com/openai/", "https://github.com/mistralai/",
-                    "https://antigravity.google/", "https://docs.x.ai/")
+                    "https://antigravity.google/", "https://docs.x.ai/", "https://opencode.ai/")
         for name, spec in INSTALL.items():
             self.assertTrue(spec.source_url.startswith(prefixes), name)
 
@@ -108,8 +110,33 @@ class HarnessInstallTest(unittest.TestCase):
         self.assertEqual(self.go(s, s.runner(code=7)), 1)
         self.assertIn("exited with code 7", s.text)
 
+    def test_opencode_installs_without_a_harness_adapter(self):
+        self.assertNotIn("opencode", HARNESSES)
+        self.name, self.spec = "opencode", INSTALL["opencode"]
+        self.binary = self.paths.home / ".opencode" / "bin" / "opencode"  # where its installer puts it
+        s = Session(["y"])
+        self.assertEqual(self.go(s, s.runner(self.appear)), 0)
+        self.assertEqual(s.asked, ["Continue? [y/N] "])
+        self.assertEqual(s.ran, [self.spec.argv])
+        self.assertIn("opencode is installed.", s.text)
+
+    def test_grok_in_its_own_bin_dir_counts_as_installed(self):
+        self.name, self.spec = "grok", INSTALL["grok"]
+        self.binary = self.paths.home / ".grok" / "bin" / "grok"  # where its installer puts it
+        s = Session(["y"])
+        self.assertEqual(self.go(s, s.runner(self.appear)), 0)
+        self.assertIn("grok is installed.", s.text)
+        s = Session()
+        self.assertEqual(self.go(s, s.runner()), 0)  # a second run sees it and runs nothing
+        self.assertEqual((s.ran, s.asked, s.said), ([], [], ["grok is already installed."]))
+
+    def test_run_cli_refuses_a_name_without_an_installer(self):
+        with self.assertRaises(ValueError) as caught:
+            harness_install.run_cli("nope", self.paths, Session().io)
+        self.assertEqual(str(caught.exception),
+                         "Unknown harness 'nope' (known: claude, codex, vibe, agy, grok, opencode)")
+
     def test_vendor_without_a_script_gets_a_link(self):
-        self.harness = HARNESSES["codex"]
         original = INSTALL["codex"]
         INSTALL["codex"] = InstallSpec((), "https://vendor.example.test/get", ())
         self.addCleanup(INSTALL.__setitem__, "codex", original)
@@ -139,7 +166,8 @@ class HarnessInstallTest(unittest.TestCase):
     def test_the_offer_tells_the_panel_which_harnesses_are_installed(self):
         from cockpit import wizard
         self.appear()  # codex in ~/.local/bin, nothing else
-        offer = {h["name"]: h for h in wizard.harness_offer(self.paths)}
+        with mock.patch("cockpit.harnesses.base.shutil.which", return_value=None):  # Harness.installed
+            offer = {h["name"]: h for h in wizard.harness_offer(self.paths)}
         self.assertEqual({name: h["installed"] for name, h in offer.items()},
                          {"claude": False, "codex": True, "vibe": False, "agy": False, "grok": False})
         self.assertTrue(offer["codex"]["available"])
