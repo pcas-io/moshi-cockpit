@@ -1,9 +1,11 @@
-// mesh-spaces: filter, pinned spaces, groups and pruning of the stored entries. Run: node --test tests/js/
+// mesh-spaces: filter, pinned spaces, groups, pruning of the stored entries and the right-click menu.
+// Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { GROUPS, PINS, addToGroup, blocks, filterRows, matches, newGroup, pin, prune, removeFromGroup, sections, unpin,
          validEntries }
   from "../../share/herdr-mods/mesh-spaces/organize.js";
+import { act, groupAction, menuItems } from "../../share/herdr-mods/mesh-spaces/menu.js";
 
 // A row as ordered() makes it: the space, its index, its git, its tree mark (null for a checkout).
 const space = (id, extra = {}) => ({ id, name: id.split("/").pop(), folder: "", branch: null, machine: null, ...extra });
@@ -144,4 +146,71 @@ test("damaged stored entries are left out", () => {
   for (const bad of [undefined, null, "x", { id: "s1" }]) assert.deepEqual(validEntries(GROUPS, bad), []);
   const clean = [{ id: "g1", name: "Web", machine: null, spaces: [] }];
   assert.equal(validEntries(GROUPS, clean), clean); // nothing damaged: the same array back
+});
+
+// What a menu item does, recorded instead of done: the host calls menu.js makes.
+function fakeHost() {
+  const calls = [];
+  return { calls, setShared: (k, v) => calls.push(["setShared", k, v]), close: () => calls.push(["close"]),
+           openOverlay: (o) => calls.push(["openOverlay", o]), ask: () => calls.push(["ask"]) };
+}
+const labels = (items) => items.map((i) => i.label);
+const item = (items, key) => items.find((i) => i.key === key);
+
+test("menu offers pin, groups of this machine and More", () => {
+  const groups = [{ id: "g1", name: "Web", machine: "devbox", spaces: ["devbox/s1"] },
+                  { id: "g2", name: "Ops", machine: "devbox", spaces: ["devbox/s3"] },
+                  { id: "g9", name: "Far", machine: "build-1", spaces: ["build-1/s2"] }];
+  const grouped = menuItems("devbox/s1", "devbox", false, [], groups);
+  assert.deepEqual(labels(grouped), ["Pin", "Move to Ops", "New group…", "Remove from Web", "", "More…"]);
+  assert.deepEqual(grouped.map((i) => i.key), ["pin", "move-g2", "new-group", "remove", "divider", "more"]);
+  // pinning takes it out of its group (the group it leaves empty goes); both lists are written
+  assert.deepEqual(item(grouped, "pin").action.writes,
+                   [[PINS, [{ id: "devbox/s1", machine: "devbox" }]], [GROUPS, [groups[1], groups[2]]]]);
+  assert.deepEqual(item(grouped, "move-g2").action.writes,
+                   [[GROUPS, [{ ...groups[1], spaces: ["devbox/s3", "devbox/s1"] }, groups[2]]]]);
+  assert.deepEqual(item(grouped, "remove").action.writes, [[GROUPS, [groups[1], groups[2]]]]);
+  assert.deepEqual(item(grouped, "new-group").action, { ask: true });
+  // pinned: Unpin, and moving into a group unpins it
+  const pins = [{ id: "devbox/s4", machine: "devbox" }];
+  const pinned = menuItems("devbox/s4", "devbox", false, pins, groups);
+  assert.deepEqual(labels(pinned), ["Unpin", "Move to Web", "Move to Ops", "New group…", "", "More…"]);
+  assert.deepEqual(item(pinned, "unpin").action.writes, [[PINS, []]]);
+  assert.deepEqual(item(pinned, "move-g1").action.writes,
+                   [[PINS, []], [GROUPS, [{ ...groups[0], spaces: ["devbox/s1", "devbox/s4"] }, groups[1], groups[2]]]]);
+  // a new group unpins too; a refused name changes nothing and keeps the field open
+  assert.deepEqual(groupAction(pins, groups, "devbox", " Infra ", "devbox/s4", "g-x").writes,
+                   [[PINS, []], [GROUPS, [...groups, { id: "g-x", name: "Infra", machine: "devbox", spaces: ["devbox/s4"] }]]]);
+  for (const bad of ["", " web ", "x".repeat(41)]) assert.equal(groupAction(pins, groups, "devbox", bad, "devbox/s4", "g-x"), null);
+  // this computer sees only its own groups
+  assert.deepEqual(labels(menuItems("s1", null, false, [], groups)), ["Pin", "New group…", "", "More…"]);
+  // every change goes to the shared store, then the menu closes; New group… only asks for the name
+  const host = fakeHost();
+  act(item(pinned, "move-g1").action, host);
+  assert.deepEqual(host.calls.map((c) => c[0] === "setShared" ? c[1] : c[0]), [PINS, GROUPS, "close"]);
+  const asking = fakeHost();
+  act(item(grouped, "new-group").action, asking);
+  assert.deepEqual(asking.calls, [["ask"]]);
+  assert.deepEqual(groups[0].spaces, ["devbox/s1"]); // inputs never change
+});
+
+test("menu on a worktree only explains and offers More", () => {
+  const groups = [{ id: "g1", name: "Web", machine: null, spaces: ["s1"] }];
+  const items = menuItems("s2", null, true, [{ id: "s2", machine: null }], groups);
+  assert.deepEqual(items.map((i) => [i.key, i.label]), [["note", "Worktrees follow their checkout"], ["more", "More…"]]);
+  assert.equal(items[0].action, null);
+  const host = fakeHost();
+  act(items[0].action, host); // the note does nothing
+  assert.deepEqual(host.calls, []);
+});
+
+test("More opens Herdr's own space menu", () => {
+  const spec = { mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: "devbox/s1" } } };
+  for (const nested of [false, true]) {
+    const more = item(menuItems("devbox/s1", "devbox", nested, [], []), "more");
+    assert.deepEqual(more.action, { open: spec });
+    const host = fakeHost();
+    act(more.action, host);
+    assert.deepEqual(host.calls, [["close"], ["openOverlay", spec]]); // closes ours first, writes nothing
+  }
 });

@@ -7,8 +7,9 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 import { GROUPS, PINS, filterRows, prune, sections, validEntries } from "./organize.js";
+import { menuInit, menuView } from "./menu.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -67,9 +68,12 @@ export function tone(t, status) {
 }
 
 const stored = (key) => validEntries(key, shared(key)); // pins, groups
+// What the right-click popup (this mod again, props view "menu") gets from the host: menu.js has no host imports.
+const MENU_KIT = { div, h_flex, v_flex, Input, InputState, shared, setShared, openOverlay, closeOverlay, props };
 
 export default class Spaces extends View {
   init(_props, cx) {
+    if (props()?.view === "menu") return menuInit(this, MENU_KIT);
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -294,9 +298,10 @@ export default class Spaces extends View {
     });
   }
 
-  menu(w) {
-    // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+  menu(w, tree) {
+    // A popup is as tall as its items; height is only the most. Ours: pins and groups, More… opens Herdr's.
+    openOverlay({ mod: "mesh-spaces", kind: "popup", width: 220, height: 320,
+                  props: { view: "menu", target: { id: w.id }, machine: w.machine ?? null, nested: Boolean(tree) } });
   }
 
   orderingDue(now) {
@@ -530,7 +535,7 @@ export default class Spaces extends View {
         } else if (from === w.id) run("space.select", { id: w.id });
         cx.notify();
       })
-      .on_mouse_down("right", () => this.menu(w))
+      .on_mouse_down("right", () => this.menu(w, tree))
       .child(
         h_flex()
           .gap(9)
@@ -559,6 +564,7 @@ export default class Spaces extends View {
   }
 
   render() {
+    if (this.view === "menu") return menuView(this, theme());
     const t = theme();
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
