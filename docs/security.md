@@ -107,7 +107,9 @@ The release installer carries the SHA-256 of the cockpit package and of the pinn
 downloads. Downloads are HTTPS only (`--proto =https`, TLS 1.2 or newer). Both files are checked before
 anything is unpacked or run; a mismatch stops the installer before it changes anything. The runtime is reused
 only when the hash stored next to it matches. Herdr is never downloaded by the cockpit: you install it from
-its vendor first.
+its vendor first. On a remote Linux machine, Install in the Machines tab fetches the install.sh of this Mac's
+version (its pinned release tag) over HTTPS only; that install.sh then verifies Python and the payload by
+SHA-256 as above.
 
 ## Agent CLI installers
 
