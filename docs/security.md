@@ -12,7 +12,7 @@ this repository; if the two ever disagree, the code is right and this file is a 
 | Keychain, `moshi-<agent>` / `<agent>` | One moshi token per agent, for this installation. |
 | Keychain, `ocellio-default` / `default` | Your ocellio token, if you use ocellio. |
 | Keychain, `ocellio-<agent>` / `<agent>` | A copy of it for each agent. |
-| `~/.config/moshi-cockpit/` | `config.json` (server addresses, which server each token is bound to, the registration token's expiry), `agents.json` (your agents), `rules.md` (your own rules). Files holding settings are written owner-only. |
+| `~/.config/moshi-cockpit/` | `config.json` (server addresses, which server each token is bound to, the registration token's expiry), `agents.json` (your agents), `rules.md` (your own rules), `hosts.json` (the targets you typed in the Machines tab). Files holding settings are written owner-only. |
 | `~/.local/state/moshi-cockpit/` | `inventory.json`, the machine inventory cache (see Machines); `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); `inventory.lock`, the lock that keeps two inventory runs from writing the cache at once; a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
 | `~/.local/share/moshi-cockpit/` | The installed release, the pinned Python runtime, and per agent the files its harness needs (a Vibe profile, say). |
 | `~/.gemini/config/mcp_config.json` | Only with an agy agent: its moshi and ocellio tokens, in plain text, mode 0600 (see below). |
@@ -88,9 +88,26 @@ yes. The cockpit adds no installer a vendor does not publish.
 
 `moshi-cockpit machine ...` and the Machines tab look at the machines Herdr reaches over ssh.
 
-- **ssh config.** `~/.ssh/config` and the files it includes are only read, to list hosts Herdr does not know
-  yet. The cockpit never writes them. `machine add` hands the host to `hc machine add`, attached to your
-  terminal, so host key checks, passwords and 2FA are answered there and never pass through the cockpit.
+- **ssh config.** `~/.ssh/config` and the files it includes are read to list hosts Herdr does not know yet. The
+  cockpit never writes them. To learn which host and port a target means, the add flow runs `ssh -G`, which
+  evaluates your ssh config like ssh itself (a `Match exec` in it runs), so it is not a pure read; it dials
+  nothing. A host that uses ProxyJump or ProxyCommand, a HostKeyAlias, known_hosts files other than the
+  defaults, or `HashKnownHosts yes` gets no host key check and no trust in the dialog: it is offered "In a tab".
+- **Own host list.** Targets typed in the Machines tab are kept in `~/.config/moshi-cockpit/hosts.json`
+  (mode 0600, read only when it is owner-only). Each entry passes the name rule below before it is used.
+- **Host keys.** Before adding, `ssh-keygen -F` asks whether the host's key is in `~/.ssh/known_hosts`. If not,
+  `ssh-keyscan` fetches the keys the host offers, and the tab shows the type and SHA256 fingerprint of one.
+  Nothing is written until you press Trust. Trust fetches the keys again and appends exactly the one line whose
+  type and fingerprint are the ones shown, under a file lock; other lines are never rewritten. If the key changed
+  in between, nothing is trusted; if the host no longer answers, nothing is trusted either. `~/.ssh` is created
+  0700 and `known_hosts` 0600 when missing.
+- **Adding.** The tab runs `hc machine add --install` without a terminal (standard input closed, a session of
+  its own, a two-minute limit after which the whole process group is killed), so neither hc nor ssh can ask
+  anything: herdr-core is installed on the machine without asking, and only key logins work. A machine that
+  wants a password, accepts only keys none of yours match, or needs a login hc can't do alone gets the
+  "In a tab" fallback: `machine add` attached to a terminal, where hc asks for the password or 2FA code.
+  Passwords never pass through the cockpit. A `hosts.json` that is broken or not owner-only never blocks an
+  add; the target is then just not saved.
 - **Names.** A machine name or ssh alias reaches `hc` only if it starts with a letter or digit and holds
   letters, digits and `. _ @ : -`; anything else is refused before a process starts.
 - **Inventory.** One fixed shell script is run on the machine (through `hc exec` for a remote one). Nothing

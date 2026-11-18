@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COLUMNS, GLYPH, HERDR_KEYS, INVENTORY_EXEC, LEGEND, STATE_TEXT, addHostCommand, cellAction, connectingNote, harnessAction,
          hostRows, inventoryArgs, layoutReady, machineRows, matrixRow, passable, remoteChips, remoteStart, tabCommand,
-         whereChoices }
+         typedTarget, whereChoices }
   from "../../share/herdr-mods/mesh-agents/machines.js";
 import { readFileSync } from "node:fs";
 
@@ -116,7 +116,7 @@ test("add host command runs the CLI in a visible tab", () => {
                    { command: "tab.new", args: { name: "Add devbox", argv, space: "s2" } });  // never a remote space
   assert.deepEqual(addHostCommand([{ id: "devbox/s1", machine: "devbox" }], CLI, "devbox"),
                    { command: "space.new", args: { name: "Add devbox", argv } });
-  // only what hc reads as a name gets an Add button (cockpit/machines.py NAME_RE): never an option or shell text
+  // only what hc reads as a name gets an Add button (cockpit/targets.py NAME_RE): never an option or shell text
   for (const ok of ["devbox", "build-1", "me@build-1", "build-1.lan:22"]) assert.equal(passable(ok), true, ok);
   for (const bad of ["", "-oProxyCommand=x", "a b", "a;b", "$(x)", "_x", "x".repeat(255), null]) assert.equal(passable(bad), false, String(bad));
   // the raw alias is checked, then shortened for display only: a long one is never cut into a valid one
@@ -127,6 +127,21 @@ test("add host command runs the CLI in a visible tab", () => {
   assert.equal(rows[2].label.length, 254);
   assert.equal(rows.length, 3);  // nothing to show for an empty entry
   assert.deepEqual(hostRows(undefined), []);
+});
+
+test("a typed target is trimmed and checked like a chip's alias", () => {
+  for (const [text, value] of [["devbox", "devbox"], ["  me@build-1 ", "me@build-1"], ["me@build-1:2222", "me@build-1:2222"],
+                               ["\tbuild-1.lan\n", "build-1.lan"]]) {
+    assert.deepEqual(typedTarget(text), { ok: true, value, note: "" }, text);
+  }
+  // nothing runs: an option, shell text, spaces inside, nothing typed
+  for (const text of ["-oProxyCommand=x", "a b", "me@devbox;id", "$(x)", "", "   ", null, undefined]) {
+    assert.deepEqual(typedTarget(text), { ok: false, value: typeof text === "string" ? text.trim() : "",
+                                          note: "Not a target ssh can use" }, String(text));
+  }
+  // what passes reaches the password fallback's command ("In a tab") unchanged
+  assert.deepEqual(addHostCommand([], CLI, typedTarget(" me@build-1:2222 ").value),
+                   { command: "space.new", args: { name: "Add me@build-1:2222", argv: [CLI, "machine", "add", "me@build-1:2222"] } });
 });
 
 test("where choices list ready machines after this Mac", () => {
