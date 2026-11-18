@@ -3,23 +3,38 @@
 // a typed target. A chip or the field starts the add flow inline (host key check, Trust with the fingerprint,
 // `machine add --batch`, which installs herdr-core there); a password, keys only or ssh settings the dialog doesn't
 // handle get "In a tab" (`machine add` attached).
-// Opening the tab asks once; "Refresh" asks one machine again; nothing polls. A Sign in or Install cell opens a
-// tab where the command runs (on that machine for a remote one). Fixed row height and column widths, so This Mac,
-// a few machines and the add area fit the 640×460 dialog without scrolling. The logic lives in machines.js (tested
-// with node); `panel` is the MeshAgents dialog, which keeps the state.
+// Opening the tab asks once; "Refresh" asks one machine again; nothing polls: a machine that was not connected is
+// asked again when Herdr reports its layout ready (machines(), which re-renders the dialog). A Sign in or Install
+// cell opens a tab where the command runs (on that machine for a remote one); "×" at a row's end removes that
+// machine from Herdr after an inline question. Fixed row height and column widths, so This Mac, six machines and
+// the add area fit the 640×460 dialog without scrolling. An add's outcome is kept in localStorage (ADDS_KEY) for a
+// dialog Herdr closed while it ran. The logic lives in machines.js (tested with node); `panel` is the MeshAgents
+// dialog, which keeps the state.
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, home, run, props, closeOverlay, spaces, machines } from "herdr";
 import { ago, btn, cockpit, plain } from "./util.js";
-import { ADD_EXEC, ADD_NOTE, COLUMNS, GLYPH, HOSTKEY_EXEC, IDLE, INVENTORY_EXEC, LEGEND, TRUST_EXEC, addBatchArgs, addHostCommand,
-         busy, cellAction, flowView, hostRows, hostkeyArgs, hostsRemoveArgs, inventoryArgs, layoutReady, machineRows, matrixRow,
-         nextStep, tabCommand, trustArgs, typedTarget } from "./machines.js";
+import { ADDS_KEY, ADD_EXEC, ADD_NOTE, COLUMNS, GLYPH, HOSTKEY_EXEC, IDLE, INVENTORY_EXEC, LEGEND, REMOVE_EXEC, TRUST_EXEC,
+         addBatchArgs, addEnded, addHostCommand, addStarted, busy, cellAction, cleanAdds, flowView, hostRows, hostkeyArgs,
+         hostsRemoveArgs, inventoryArgs, layoutReady, machineRemoveArgs, machineRows, matrixRow, nextStep, recentNames,
+         removeQuestion, tabCommand, takeOutcome, trustArgs, typedTarget } from "./machines.js";
 
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
 const keyOf = (name) => name ?? "";
-const ROW_H = 26;  // every machine row, whatever it shows: a 14 px name line over a 12 px status line
+const ROW_H = 34;  // every machine row, whatever it shows: a 14 px name line, 4 px apart from a 12 px status line
 const CELL_W = 46;  // every harness column; the machine column takes the rest
+const REMOVE_W = 20;  // the "×" column at the row end
+
+// The add flow's outcomes (machines.js cleanAdds); localStorage may be missing or refuse: then nothing is kept.
+function loadAdds() {
+  try { return cleanAdds(JSON.parse(localStorage.getItem(ADDS_KEY) ?? "{}"), Date.now()); } catch { return {}; }
+}
+
+function keepAdds(panel, change) {
+  panel.adds = change(loadAdds(), Date.now());  // read again: another dialog may have written since
+  try { localStorage.setItem(ADDS_KEY, JSON.stringify(panel.adds)); } catch { /* kept for this dialog only */ }
+}
 
 function inspect(panel, name, refresh, cx) {
   const key = keyOf(name);
@@ -44,7 +59,7 @@ function loadList(panel, cx, seed = null) {
   cx.spawn(async (cx) => {
     try {
       const list = await cockpit(exec, home, ["machine", "list", "--json"]);
-      panel.machines = machineRows(list);
+      panel.machines = machineRows(list, recentNames(panel.adds, list, Date.now()));
       panel.sshHosts = hostRows(list?.ssh_hosts);
       panel.savedHosts = hostRows(list?.saved_hosts);
       panel.machinesProblem = list?.problem ? plain(list.problem, 300) : null;
@@ -60,11 +75,19 @@ function loadList(panel, cx, seed = null) {
   });
 }
 
-// This Mac is asked at once; Herdr's machines as soon as the list says which are connected.
+// This Mac is asked at once; Herdr's machines as soon as the list says which are connected. The last add's outcome,
+// left by a dialog that closed while it ran, shows once in the flow area.
 export function loadMachines(panel, cx) {
   Object.assign(panel, { machines: machineRows(null), sshHosts: null, savedHosts: null, machinesProblem: null,
-                         inventory: {}, machineAsk: null, targetNote: "" });
+                         inventory: {}, machineAsk: null, removeAsk: null, targetNote: "", rechecked: new Set() });
   panel.flow ??= IDLE;
+  let shown = null;
+  keepAdds(panel, (adds) => {
+    const taken = takeOutcome(adds);
+    shown = taken.flow;
+    return taken.adds;
+  });
+  if (shown && !busy(panel.flow)) panel.flow = shown;
   if (!panel.machineTarget) {  // retained text state: created once, here (init or a click), never in render
     panel.machineTarget = InputState.new({ placeholder: "user@host, user@host:port or an ssh alias" });
     panel.machineTarget.on("submit", (_e, cx) => addTyped(panel, cx));
@@ -73,11 +96,23 @@ export function loadMachines(panel, cx) {
   loadList(panel, cx);
 }
 
+// The dialog closes (MeshAgents.close, where Herdr calls it): an answer that still arrives is stored for the next
+// Machines tab instead of being shown here. Without the call, a running add's pending mark says so next time.
+export function closeMachines(panel) {
+  panel.closed = true;
+}
+
 export function refreshMachine(panel, name, cx) {
   if (panel.inventory?.[keyOf(name)]?.loading) return;
   panel.machineAsk = null;
   inspect(panel, name, true, cx);
   cx.notify();
+}
+
+// A machine not connected yet: Herdr's list is read again, and a machine connected by now is asked.
+function recheck(panel, name, cx) {
+  panel.rechecked.add(name);
+  loadList(panel, cx);
 }
 
 function openTab(machine, label, action) {
@@ -90,7 +125,34 @@ function openTab(machine, label, action) {
 function act(panel, m, h, action, cx) {
   if (!action.confirm) return openTab(m.name, plain(h.label, 40), action);
   panel.machineAsk = { machine: m.name, harness: h.name };
+  panel.removeAsk = null;
   cx.notify();
+}
+
+function askRemove(panel, m, cx) {
+  if (panel.removeAsk?.busy) return;
+  panel.removeAsk = { machine: m.name, busy: false };
+  panel.machineAsk = null;
+  cx.notify();
+}
+
+// `machine remove`: Herdr forgets it, its cached inventory goes; then the list is read again.
+function removeNow(panel, cx) {
+  const ask = panel.removeAsk;
+  if (!ask || ask.busy) return;
+  ask.busy = true;
+  cx.notify();
+  cx.spawn(async (cx) => {
+    try {
+      await cockpit(exec, home, machineRemoveArgs(ask.machine), true, REMOVE_EXEC);
+      delete panel.inventory[keyOf(ask.machine)];
+      loadList(panel, cx);
+    } catch (e) {
+      panel.machinesProblem = plain(e?.message ?? e, 300);  // the list stays as it was
+    }
+    if (panel.removeAsk === ask) panel.removeAsk = null;
+    cx.notify();
+  });
 }
 
 // The fallback: `machine add` attached in a tab on this Mac, where hc and ssh ask what they need.
@@ -107,7 +169,14 @@ function advance(panel, answer, cx) {
   panel.flow = nextStep(before, answer);
   cx.notify();
   if (panel.flow === before) return;
-  if (panel.flow.step === "adding") addNow(panel, panel.flow.target, cx);
+  if (panel.flow.step === "adding") {
+    keepAdds(panel, (adds, now) => addStarted(adds, panel.flow.target, now));
+    addNow(panel, panel.flow.target, cx);
+  }
+  if (before.step === "adding" && (answer.event === "added" || answer.event === "error")) {
+    // shown here at once: its stored mark keeps only time and machine (for "Connecting"), no outcome to show again
+    keepAdds(panel, (adds, now) => addEnded(adds, before.target, panel.flow, answer.data?.machine, now, !panel.closed));
+  }
   if (answer.event === "added" && answer.data?.ok === true) {
     panel.machineTarget?.set_value("");
     panel.targetNote = "";
@@ -170,8 +239,9 @@ function note(t, text, color = t.dim) {
   return div().text_size(11).text_color(color).truncate().child(text);
 }
 
-function legend(t) {
-  return h_flex().h(14).flex_none().gap(12).px(6).items_center().text_size(10.5).text_color(t.dim)
+// The cell glyphs' legend; main.js puts it beside the tab buttons.
+export function machinesLegend(t) {
+  return h_flex().h(14).flex_none().gap(10).items_center().text_size(10.5).text_color(t.dim)
     .children(LEGEND.map((l) => h_flex().gap(4).items_center()
       .child(div().text_color(glyphColor(t, l.show)).child(GLYPH[l.show])).child(l.text)));
 }
@@ -179,7 +249,8 @@ function legend(t) {
 function headerRow(t) {
   return h_flex().w_full().h(16).flex_none().items_center().text_size(10.5).text_color(t.dim)
     .child(div().flex_1().min_w_0().px(6).child("Machine"))
-    .children(COLUMNS.map((c) => div().w(CELL_W).flex_none().text_center().truncate().child(c.short)));
+    .children(COLUMNS.map((c) => div().w(CELL_W).flex_none().text_center().truncate().child(c.short)))
+    .child(div().w(REMOVE_W).flex_none());
 }
 
 // A cell: ● ready, ◐ sign in, ○ install, or empty; the state and what a click does in its tooltip.
@@ -195,7 +266,8 @@ function cell(panel, t, m, h, c, id) {
 }
 
 function machineCell(panel, t, m, r, id) {
-  return v_flex().flex_1().min_w_0().h(ROW_H).px(6).justify_center()
+  const refresh = (_e, cx) => (m.connected ? refreshMachine(panel, m.name, cx) : recheck(panel, m.name, cx));
+  return v_flex().flex_1().min_w_0().h(ROW_H).px(6).gap(4).justify_center()
     .child(div().text_size(12.5).line_height("14px").font_semibold().text_color(m.connected ? t.foreground : t.dim).truncate()
       .child(m.label))
     .when(r.refresh, (el) => el.child(h_flex().w_full().min_w_0().gap(6).items_center().text_size(10).line_height("12px")
@@ -203,27 +275,58 @@ function machineCell(panel, t, m, r, id) {
         .child(r.status))
       .child(div().id(`${id}-refresh`).flex_none().rounded(3).text_color(r.loading ? t.dim : t.muted)
         .when(!r.loading, (e) => e.cursor_pointer().hover((s) => s.text_color(t.foreground))
-          .on_click((_e, cx) => refreshMachine(panel, m.name, cx)))
+          .on_click(refresh))
         .child("Refresh"))));
 }
 
-// One machine, one fixed-height row: the machine cell, then six cells or one line (a note or an error) across them.
-function machineRow(panel, t, m, index) {
+// The row's end: "×" for a machine of Herdr's (never This Mac, never a name hc could misread), else the same gap.
+function removeCell(panel, t, m, id) {
+  const el = div().id(id).w(REMOVE_W).h(ROW_H).flex_none().flex().items_center().justify_center().rounded(5);
+  if (!m.removable) return el;
+  const asking = panel.removeAsk?.machine === m.name;
+  return el.text_size(13).text_color(asking ? t.foreground : t.dim).cursor_pointer().tooltip(`Remove ${m.label} from Herdr`)
+    .when(asking, (e) => e.bg(t.raised)).hover((s) => s.text_color(t.foreground).bg(t.hover))
+    .on_click((_e, cx) => askRemove(panel, m, cx)).child("\u00d7");
+}
+
+// One machine, one fixed-height row: the machine cell, then six cells or one line (a note or an error) across them,
+// then "×". The connecting explanation may take two lines (the whole of it in the tooltip).
+function machineRow(panel, t, m, index, cx) {
+  const ready = layoutReady(machines(), m.name);  // a tab opens there only once Herdr can
+  // Herdr has the layout of a machine the list did not show connected: read the list again, once per dialog
+  if (!m.connected && m.removable && ready && !panel.rechecked?.has(m.name)) recheck(panel, m.name, cx);
   const inv = m.connected ? panel.inventory?.[keyOf(m.name)] : null;  // never an unsupported name's key
-  const r = matrixRow(m, inv, layoutReady(machines(), m.name), ago);  // a tab opens there only once Herdr can
+  const r = matrixRow(m, inv, ready, ago);
   const id = `machine-${index}`;
   const line = r.error || r.note;
   const harnesses = inv?.data?.harnesses ?? [];
+  const text = m.connecting && !r.error
+    ? div().text_size(10.5).line_height("12px").max_h(24).overflow_hidden().text_color(t.dim).child(line)
+    : note(t, line, r.error ? t.blocked : t.dim);
   return h_flex().id(id).w_full().h(ROW_H).flex_none().items_center()
     .child(machineCell(panel, t, m, r, id))
     .when(r.cells.length > 0, (el) => el.children(r.cells.map((c) =>
       cell(panel, t, m, harnesses.find((h) => h?.name === c.name), c, `${id}-${c.name}`))))
     .when(r.cells.length === 0, (el) => el.child(div().id(`${id}-note`).w(CELL_W * COLUMNS.length).flex_none().px(6)
-      .when(!!line, (e) => e.tooltip(line)).child(note(t, line, r.error ? t.blocked : t.dim))));
+      .when(!!line, (e) => e.tooltip(line)).child(text)))
+    .child(removeCell(panel, t, m, `${id}-remove`));
+}
+
+// The question to remove a machine, in the same place: Remove or Cancel.
+function removeRow(panel, t) {
+  const ask = panel.removeAsk;
+  const m = (panel.machines ?? []).find((k) => k.removable && k.name === ask.machine);
+  if (!m) return null;
+  return h_flex().w_full().gap(8).px(8).py(4).rounded(6).bg(t.raised).items_center().flex_none()
+    .child(div().flex_1().min_w_0().text_size(11.5).text_color(t.foreground)
+      .child(ask.busy ? `Removing ${m.label}\u2026` : removeQuestion(m.label)))
+    .child(btn("machine-remove-yes", t, "Remove", (_e, cx) => removeNow(panel, cx), { enabled: !ask.busy }))
+    .child(btn("machine-remove-no", t, "Cancel", (_e, cx) => { panel.removeAsk = null; cx.notify(); }, { enabled: !ask.busy }));
 }
 
 // The confirm for a remote install, under the matrix: the vendor's command, then Install or Cancel.
 function askRow(panel, t) {
+  if (panel.removeAsk) return removeRow(panel, t);
   const ask = panel.machineAsk;
   const m = ask && (panel.machines ?? []).find((k) => k.connected && k.name === ask.machine);
   const h = m && (panel.inventory?.[keyOf(m.name)]?.data?.harnesses ?? []).find((k) => k?.name === ask.harness);
@@ -258,9 +361,10 @@ function chipRow(panel, t, label, hosts, prefix, removable) {
 }
 
 // One 28 px row under the chips (there even when the list failed): a target typed here starts the flow (Enter or Add).
+// Why here and not in Herdr's own form is the label's tooltip.
 function addRow(panel, t) {
   return h_flex().w_full().h(28).gap(6).px(6).items_center().flex_none()
-    .child(div().flex_none().text_size(11.5).text_color(t.dim).child("Add a machine"))
+    .child(div().id("machines-add-note").flex_none().text_size(11.5).text_color(t.dim).tooltip(ADD_NOTE).child("Add a machine"))
     .child(Input.new(panel.machineTarget).flex_1().min_w_0().h(26).px(8).rounded(6).border_1().border_color(t.input)
       .bg(t.background).text_size(11.5))
     .child(btn("machine-add", t, "Add", (_e, cx) => addTyped(panel, cx), { enabled: !busy(panel.flow) }))
@@ -284,7 +388,10 @@ function flowArea(panel, t) {
     .children(view.buttons.map((b) => buttons[b]()));
 }
 
-export function machinesTab(panel, t) {
+// Height budget, 356 px for the tab (the legend sits beside the tab buttons): header 16 + This Mac and 6 machines × 34
+// = 254, a chip row 20, the add row 28, gaps 6 → 314; with the install or remove question (34) 354, or with a flow
+// line (22) 342. Question and flow line together fit without chips (356).
+export function machinesTab(panel, t, cx) {
   const ask = askRow(panel, t);
   const ssh = chipRow(panel, t, "From ~/.ssh/config", panel.sshHosts, "ssh-host", false);
   const saved = chipRow(panel, t, "Saved", panel.savedHosts, "saved-host", true);
@@ -292,13 +399,10 @@ export function machinesTab(panel, t) {
   // line_height: one fixed text height for the whole tab, so its rows add up the same on every theme.
   return v_flex().w_full().flex_1().min_h(0).gap(6).line_height(1.2).overflow_y_scrollbar()
     .when(!!panel.machinesProblem, (el) => el.child(div().px(6).flex_none().child(note(t, panel.machinesProblem, t.blocked))))
-    .child(legend(t))
     .child(v_flex().w_full().flex_none()
       .child(headerRow(t))
-      .children((panel.machines ?? []).map((m, i) => machineRow(panel, t, m, i))))
+      .children((panel.machines ?? []).map((m, i) => machineRow(panel, t, m, i, cx))))
     .when(!!ask, (el) => el.child(ask))
-    .child(div().id("machines-add-note").px(6).flex_none().text_size(10.5).text_color(t.dim).truncate().tooltip(ADD_NOTE)
-      .child(ADD_NOTE))
     .when(!!ssh, (el) => el.child(ssh))
     .when(!!saved, (el) => el.child(saved))
     .child(addRow(panel, t))

@@ -2,8 +2,8 @@
 // Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ADD_EXEC, ADD_NOTE, HOSTKEY_EXEC, IDLE, TRUST_EXEC, addBatchArgs, busy, flowView, hostkeyArgs, hostsRemoveArgs,
-         keyLabel, nextStep, trustArgs }
+import { ADD_EXEC, ADD_NOTE, HOSTKEY_EXEC, IDLE, RECENT_MS, TRUST_EXEC, addBatchArgs, addEnded, addStarted, busy, cleanAdds,
+         closedNote, flowView, hostkeyArgs, hostsRemoveArgs, keyLabel, nextStep, recentNames, takeOutcome, trustArgs }
   from "../../share/herdr-mods/mesh-agents/machines.js";
 import { readFileSync } from "node:fs";
 
@@ -56,15 +56,18 @@ test("an unknown key asks first; Trust adds, Cancel ends", () => {
   assert.ok(busy(s));
   s = nextStep(s, { event: "trusted", target: T });
   assert.deepEqual(s, { step: "adding", target: T });
-  assert.deepEqual(flowView(s), { text: `Adding ${T} and installing herdr-core there…`, tone: "dim", buttons: [] });
+  assert.deepEqual(flowView(s), { text: `Adding ${T} and installing herdr-core there. The first connection can take a minute or two.`,
+                                  tone: "dim", buttons: [] });
 });
 
-test("a known key goes straight to adding; success clears the flow", () => {
+test("a known key goes straight to adding; success says so", () => {
   let s = nextStep({ step: "checking", target: T }, { event: "hostkey", target: T, data: { known: true, keys: [] } });
   assert.deepEqual(s, { step: "adding", target: T });
   s = nextStep(s, { event: "added", target: T, data: { ok: true, machine: "build-1", inventory: { harnesses: [] } } });
-  assert.deepEqual(s, IDLE);
-  assert.equal(flowView(s), null);
+  assert.deepEqual(s, { step: "idle", note: "build-1 was added." });
+  assert.deepEqual(flowView(s), { text: "build-1 was added.", tone: "dim", buttons: [] });
+  s = nextStep({ step: "adding", target: T }, { event: "added", target: T, data: { ok: true, machine: null } });
+  assert.deepEqual(s, { step: "idle", note: `${T} was added.` });
   s = nextStep({ step: "adding", target: T }, { event: "added", target: T,
                                                   data: { ok: true, machine: null, message: `${T} was added; Herdr does not list it yet.` } });
   assert.deepEqual(s, { step: "idle", note: `${T} was added; Herdr does not list it yet.` });
@@ -130,4 +133,74 @@ test("answers for another step or target change nothing", () => {
 test("the note under the grid", () => {
   assert.equal(ADD_NOTE, "Herdr's own \"Add a machine\" can't answer ssh's questions (host key, password, installing herdr-core). "
                          + "Add machines here.");
+});
+
+test("an add's outcome waits for the next Machines tab, shown once", () => {
+  const t0 = 1_000_000;
+  let adds = addStarted({}, T, t0);
+  assert.deepEqual(adds, { [T]: { at: t0, pending: true } });
+  const ok = nextStep({ step: "adding", target: T }, { event: "added", target: T, data: { ok: true, machine: "build-1" } });
+  adds = addEnded(adds, T, ok, "build-1", t0 + 5000);
+  assert.deepEqual(adds, { [T]: { at: t0 + 5000, machine: "build-1", outcome: { step: "idle", note: "build-1 was added." } } });
+  // what goes to localStorage comes back unchanged; then it is shown once
+  adds = cleanAdds(JSON.parse(JSON.stringify(adds)), t0 + 6000);
+  let taken = takeOutcome(adds);
+  assert.deepEqual(taken.flow, { step: "idle", note: "build-1 was added." });
+  assert.deepEqual(taken.adds, { [T]: { at: t0 + 5000, machine: "build-1" } });
+  assert.equal(takeOutcome(taken.adds).flow, null);
+  // the latest of several, a failure or a step that offers a tab keeps its button
+  const failed = { step: "failed", target: "devbox", message: "no route to host" };
+  adds = addEnded(addEnded({}, T, { step: "password", target: T }, null, t0), "devbox", failed, null, t0 + 1);
+  taken = takeOutcome(adds);
+  assert.deepEqual(taken.flow, failed);
+  assert.deepEqual(flowView(taken.flow), { text: "no route to host", tone: "blocked", buttons: [] });
+  assert.equal(takeOutcome(taken.adds).flow, null);  // all cleared
+  // an add whose answer never came (the dialog closed and took it along)
+  taken = takeOutcome(addStarted({}, "devbox", t0));
+  assert.deepEqual(taken.flow, { step: "idle", note: closedNote("devbox") });
+  assert.equal(closedNote("devbox"), "This dialog closed while devbox was being added. The list above shows whether it arrived.");
+  assert.deepEqual(taken.adds, { devbox: { at: t0 } });
+  // a cancel or a running step leaves no outcome
+  assert.deepEqual(addEnded({}, T, IDLE, null, t0), { [T]: { at: t0 } });
+});
+
+test("an outcome shows once: in the live dialog, or in the next tab when the dialog closed first", () => {
+  const t0 = 1_000_000;
+  const ok = { step: "idle", note: "build-1 was added." };
+  const store = (adds) => cleanAdds(JSON.parse(JSON.stringify(adds)), t0 + 10000);  // through localStorage
+  // shown live: the pending mark goes, nothing is left to show again; the time stays for "Connecting"
+  let adds = store(addEnded(addStarted({}, T, t0), T, ok, "build-1", t0 + 5000, true));
+  assert.deepEqual(adds, { [T]: { at: t0 + 5000, machine: "build-1" } });
+  assert.equal(takeOutcome(adds).flow, null);
+  // closed before the answer, which never came: the pending mark shows once, then nothing
+  let taken = takeOutcome(store(addStarted({}, T, t0)));
+  assert.deepEqual(taken.flow, { step: "idle", note: closedNote(T) });
+  assert.equal(takeOutcome(store(taken.adds)).flow, null);
+  // closed before the answer, which came late: its outcome shows once, then nothing
+  taken = takeOutcome(store(addEnded(addStarted({}, T, t0), T, ok, "build-1", t0 + 5000, false)));
+  assert.deepEqual(taken.flow, ok);
+  assert.equal(takeOutcome(store(taken.adds)).flow, null);
+});
+
+test("stored adds are checked before they count and expire", () => {
+  const t0 = 1_000_000;
+  const raw = { "-oProxyCommand=x": { at: t0 }, "a b": { at: t0 }, devbox: { at: "x" }, old: { at: t0 - 600000 },
+                future: { at: t0 + 1 }, [T]: { at: t0, machine: "-x", pending: "yes", outcome: { step: "adding", target: T } },
+                "build-1": { at: t0, outcome: { step: "failed", target: "-evil", message: "a\u001b[2Jb" } } };
+  assert.deepEqual(cleanAdds(raw, t0), { [T]: { at: t0 }, "build-1": { at: t0, outcome: { step: "failed", target: "build-1", message: "a [2Jb" } } });
+  for (const junk of [null, "x", [], 3]) assert.deepEqual(cleanAdds(junk, t0), {});
+});
+
+test("a machine added a moment ago is recent, by hc's name or by target", () => {
+  const t0 = 1_000_000;
+  const list = { machines: [{ name: "build-1", target: "deploy@build-1" }, { name: "devbox", target: "me@devbox" },
+                            { name: "lab-2", target: "lab-2" }, { name: "-x", target: "x@y" }] };
+  const adds = { [T]: { at: t0 }, "me@devbox": { at: t0, machine: "devbox" }, "lab-2": { at: t0 - RECENT_MS } };
+  assert.deepEqual([...recentNames(adds, list, t0 + 1000)].sort(), ["build-1", "devbox"]);
+  assert.deepEqual([...recentNames(adds, list, t0 + RECENT_MS)], []);
+  // still running: counts from its start until its answer is due, plus the connecting time
+  const running = { "x@y": { at: t0, pending: true }, [T]: { at: t0, pending: true } };
+  assert.deepEqual([...recentNames(running, list, t0 + ADD_EXEC.timeout + RECENT_MS - 1)], ["build-1"]);
+  assert.deepEqual([...recentNames(running, list, t0 + ADD_EXEC.timeout + RECENT_MS)], []);
+  assert.deepEqual([...recentNames(null, list, t0)], []);
 });

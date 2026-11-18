@@ -102,6 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="without a terminal (the Machines tab): installs herdr-core there, never asks; "
                               "a password or an unknown host key comes back as the answer")
     mac_add.add_argument("--json", action="store_true")
+    mac_rm = mac_sub.add_parser("remove", help="remove a machine from Herdr (hc machine rm); its terminals keep running there")
+    mac_rm.add_argument("name", help="a machine from `machine list`")
+    mac_rm.add_argument("--json", action="store_true")
     mac_hosts = mac_sub.add_parser("hosts", help="your own list of hosts that are not in ~/.ssh/config")
     mac_hosts.add_argument("hosts_command", choices=["add", "remove"])
     mac_hosts.add_argument("target")
@@ -432,6 +435,10 @@ def cmd_machine(args: argparse.Namespace, paths: Paths) -> int:
         print(f"{args.on or machines.THIS_MAC}, checked {result['checked_at']}" + (" (cached)" if result["cached"] else ""))
         for row in result["harnesses"]:
             print(f"{row['label']:<14}{row['state_text']}")
+        return 0
+    if args.machine_command == "remove":
+        result = machines.remove_machine(paths, args.name, machines.run_capture)
+        print(json.dumps(result) if args.json else f"{clean(args.name, '?', limit=254)} removed from Herdr")
         return 0
     if args.machine_command == "add" and not args.batch:
         return _machine_add(args, paths)
