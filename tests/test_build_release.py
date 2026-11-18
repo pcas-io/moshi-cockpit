@@ -28,6 +28,7 @@ _spec.loader.exec_module(build_release)
 
 VERSION = "0.0.1"
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+UNSUPPORTED = "Windows follows; this release supports macOS on Apple silicon and Linux on x86_64 and aarch64."
 PYTHON_STUB = "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n"
 # Stands in for the real bin/moshi-cockpit: records how the installer called it.
 COCKPIT_STUB = ("#!/bin/sh\n"
@@ -91,20 +92,31 @@ class BuildTest(unittest.TestCase):
             script = out.read_text()
         self.assertIn(f"PAYLOAD_SHA256='{sha256(b'payload bytes')}'", script)
         self.assertIn(f"VERSION='{VERSION}'", script)
-        self.assertIn(f"PYTHON_SHA256='{build_release.PYTHON_SHA256}'", script)
-        self.assertIn(f"PYTHON_URL='{build_release.PYTHON_URL}'", script)
+        for key, (url, sha) in build_release.PYTHONS.items():
+            name = key.upper().replace("-", "_")
+            self.assertIn(f"PYTHON_URL_{name}='{url}'", script)
+            self.assertIn(f"PYTHON_SHA256_{name}='{sha}'", script)
         self.assertIn(f"RELEASE_URL='https://github.com/pcas-io/moshi-cockpit/releases/download/v{VERSION}'", script)
         self.assertIn("CURL_PROTO='=https'", script)
         self.assertIn("HERDR_APP='/Applications/Herdr.app'", script)
         self.assertNotRegex(script, r"@[A-Z0-9_]+@")
 
-    def test_the_pinned_python_is_3_12_16_for_apple_silicon_from_astral(self):
+    def test_the_three_pinned_runtimes_are_astral_3_12_16(self):
         self.assertEqual(build_release.PYTHON_VERSION, "3.12.16")
-        self.assertTrue(build_release.PYTHON_URL.startswith(
-            "https://github.com/astral-sh/python-build-standalone/releases/download/"))
-        self.assertIn("cpython-3.12.16%2B", build_release.PYTHON_URL)
-        self.assertTrue(build_release.PYTHON_URL.endswith("-aarch64-apple-darwin-install_only.tar.gz"))
-        self.assertRegex(build_release.PYTHON_SHA256, r"^[0-9a-f]{64}$")
+        pins = build_release.PYTHONS
+        self.assertEqual(sorted(pins), ["linux-aarch64", "linux-x86_64", "macos-arm64"])
+        self.assertEqual(pins["macos-arm64"][1], "fbf4afef53c2a6b72bb741bc06d5671a9dfaf87bd84e5aa73ac9b3d0d589f14e")
+        self.assertEqual(pins["linux-x86_64"][1], "6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de")
+        self.assertEqual(pins["linux-aarch64"][1], "a945427411dc6851a1393533b74a4a1ac434321ae397f2ec69897a9b4fde032b")
+        triples = {"macos-arm64": "aarch64-apple-darwin", "linux-x86_64": "x86_64-unknown-linux-gnu",
+                   "linux-aarch64": "aarch64-unknown-linux-gnu"}
+        for key, (url, _sha) in pins.items():
+            with self.subTest(key=key):
+                self.assertTrue(url.startswith(
+                    "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/"))
+                self.assertIn("20261026", url)
+                self.assertIn("3.12.16", url)
+                self.assertTrue(url.endswith(f"cpython-3.12.16%2B20261026-{triples[key]}-install_only.tar.gz"))
 
     def test_bad_inputs_are_refused(self):
         good = "a" * 64
@@ -114,6 +126,13 @@ class BuildTest(unittest.TestCase):
                 build_release.render(version, sha)
         with self.assertRaises(ValueError):
             build_release.render("1.2.3", good, release_url="https://x.example.test/it's")
+        pins = dict(build_release.PYTHONS)
+        for pythons in ({k: v for k, v in pins.items() if k != "linux-aarch64"},
+                        {**pins, "linux-armv7": pins["linux-x86_64"]},
+                        {**pins, "linux-x86_64": (pins["linux-x86_64"][0], "a" * 63)},
+                        {**pins, "linux-aarch64": ("https://x.example.test/it's", good)}):
+            with self.subTest(pythons=sorted(pythons)), self.assertRaises(ValueError):
+                build_release.render("1.2.3", good, pythons=pythons)
 
     def test_the_rendered_script_passes_shellcheck(self):
         if not shutil.which("shellcheck"):
@@ -153,14 +172,16 @@ class InstallerRunTest(unittest.TestCase):
         self.fakes.mkdir()
 
     def serve(self, python: Optional[bytes] = None, payload: Optional[bytes] = None) -> None:
-        (self.web / "cpython.tar.gz").write_bytes(self.python if python is None else python)
+        for key in build_release.PYTHONS:
+            (self.web / f"cpython-{key}.tar.gz").write_bytes(self.python if python is None else python)
         (self.web / "release" / f"moshi-cockpit-{VERSION}.tar.gz").write_bytes(
             self.payload if payload is None else payload)
 
     def script(self, herdr: Optional[Path] = None) -> str:
         return build_release.render(
-            VERSION, sha256(self.payload), python_url=f"{self.server.url}/cpython.tar.gz",
-            python_sha256=sha256(self.python), release_url=f"{self.server.url}/release",
+            VERSION, sha256(self.payload),
+            pythons={k: (f"{self.server.url}/cpython-{k}.tar.gz", sha256(self.python)) for k in build_release.PYTHONS},
+            release_url=f"{self.server.url}/release",
             herdr_app=str(herdr or self.herdr), curl_proto="=http")
 
     def run_installer(self, *args: str, herdr: Optional[Path] = None, **kwargs) -> subprocess.CompletedProcess:
@@ -175,6 +196,12 @@ class InstallerRunTest(unittest.TestCase):
     def called(self) -> List[str]:
         return (self.home / "cockpit-called").read_text().splitlines()
 
+    def uname(self, system: str, machine: str) -> None:
+        """A fake `uname` first on the PATH: -s prints the system, anything else the machine."""
+        fake = self.fakes / "uname"
+        fake.write_text(f"#!/bin/sh\ncase \"$1\" in -s) echo {system} ;; *) echo {machine} ;; esac\n")
+        fake.chmod(0o755)
+
     def test_installs_the_runtime_and_the_app_then_runs_install(self):
         self.serve()
         done = self.run_installer("--moshi", "https://moshi.example.test/mcp",
@@ -185,7 +212,8 @@ class InstallerRunTest(unittest.TestCase):
         self.assertEqual(self.called(), [str(app / "bin" / "moshi-cockpit"), "install",
                                          "--moshi", "https://moshi.example.test/mcp",
                                          "--ocellio", "https://ocellio.example.test/mcp/"])
-        self.assertEqual(sorted(self.server.requests), ["/cpython.tar.gz", f"/release/moshi-cockpit-{VERSION}.tar.gz"])
+        self.assertEqual(sorted(self.server.requests),
+                         ["/cpython-macos-arm64.tar.gz", f"/release/moshi-cockpit-{VERSION}.tar.gz"])
 
     def test_without_flags_and_without_a_terminal_it_asks_nothing(self):
         self.serve()
@@ -214,13 +242,19 @@ class InstallerRunTest(unittest.TestCase):
 
     def test_rendered_script_refuses_a_tampered_python(self):
         self.serve(python=tarball({"python/bin/python3": "#!/bin/sh\necho evil\n"}))
-        done = self.run_installer()
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("checksum", done.stderr)
-        self.assertIn("Python", done.stderr)
-        self.assertFalse((self.data / "runtime").exists())
-        self.assertFalse((self.data / "app").exists())
-        self.assertFalse((self.home / "cockpit-called").exists())
+        for system, machine, key in (("Darwin", "arm64", "macos-arm64"), ("Linux", "x86_64", "linux-x86_64"),
+                                     ("Linux", "aarch64", "linux-aarch64")):
+            with self.subTest(key=key):
+                self.uname(system, machine)
+                self.server.requests.clear()
+                done = self.run_installer()
+                self.assertEqual(done.returncode, 1)
+                self.assertIn("checksum", done.stderr)
+                self.assertIn("Python", done.stderr)
+                self.assertIn(f"/cpython-{key}.tar.gz", self.server.requests)
+                self.assertFalse((self.data / "runtime").exists())
+                self.assertFalse((self.data / "app").exists())
+                self.assertFalse((self.home / "cockpit-called").exists())
 
     def test_rendered_script_stops_without_herdr(self):
         self.serve()
@@ -230,15 +264,65 @@ class InstallerRunTest(unittest.TestCase):
         self.assertEqual(self.server.requests, [])  # nothing downloaded
         self.assertFalse(self.data.exists())
 
-    def test_other_systems_are_told_what_follows(self):
-        fake_uname = self.fakes / "uname"
-        fake_uname.write_text("#!/bin/sh\ncase \"$1\" in -s) echo Linux ;; *) echo x86_64 ;; esac\n")
-        fake_uname.chmod(0o755)
+    def test_linux_x86_64_installs_headless_without_herdr(self):
+        self.uname("Linux", "x86_64")
+        self.serve()
+        done = self.run_installer(herdr=self.tmp / "Applications" / "Missing.app")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(sorted(self.server.requests),
+                         ["/cpython-linux-x86_64.tar.gz", f"/release/moshi-cockpit-{VERSION}.tar.gz"])
+        self.assertEqual(self.called(), [str(self.data / "app" / VERSION / "bin" / "moshi-cockpit"), "install"])
+        self.assertNotIn("Herdr from", done.stderr)
+
+    def test_linux_aarch64_picks_its_runtime(self):
+        for machine in ("aarch64", "arm64"):
+            with self.subTest(machine=machine):
+                self.uname("Linux", machine)
+                self.serve()
+                shutil.rmtree(self.data, ignore_errors=True)
+                self.server.requests.clear()
+                done = self.run_installer(herdr=self.tmp / "Applications" / "Missing.app")
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(sorted(self.server.requests),
+                                 ["/cpython-linux-aarch64.tar.gz", f"/release/moshi-cockpit-{VERSION}.tar.gz"])
+
+    def test_unknown_linux_architecture_is_refused_before_download(self):
+        self.uname("Linux", "armv7l")
         self.serve()
         done = self.run_installer()
         self.assertEqual(done.returncode, 1)
-        self.assertIn("Windows and Linux follow; this release supports macOS on Apple silicon.", done.stderr)
+        self.assertIn(UNSUPPORTED, done.stderr)
         self.assertEqual(self.server.requests, [])
+        self.assertFalse(self.data.exists())
+
+    def test_other_systems_are_told_what_follows(self):
+        for system, machine in (("MINGW64_NT-10.0", "x86_64"), ("Darwin", "x86_64")):
+            with self.subTest(system=system, machine=machine):
+                self.uname(system, machine)
+                self.serve()
+                done = self.run_installer()
+                self.assertEqual(done.returncode, 1)
+                self.assertIn(UNSUPPORTED, done.stderr)
+                self.assertEqual(self.server.requests, [])
+
+    def test_checksum_uses_sha256sum_when_present(self):
+        fake = self.fakes / "sha256sum"
+        fake.write_text("#!/bin/sh\n"
+                        "printf '%s\\n' \"$@\" >> \"$HOME/sha256sum-called\"\n"
+                        "exec /usr/bin/python3 -I -c 'import hashlib, sys; "
+                        "print(hashlib.sha256(open(sys.argv[1], \"rb\").read()).hexdigest() + \"  \" + sys.argv[1])' "
+                        "\"$1\"\n")
+        fake.chmod(0o755)
+        self.serve()
+        done = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        checked = (self.home / "sha256sum-called").read_text().splitlines()
+        self.assertEqual(len(checked), 2)  # Python and the payload
+        self.assertEqual(self.called()[1:], ["install"])
+        self.serve(payload=self.payload + b"x")
+        done = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("checksum mismatch (moshi-cockpit)", done.stderr)
 
     def test_an_unknown_flag_stops_before_anything_happens(self):
         self.serve()

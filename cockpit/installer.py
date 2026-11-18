@@ -1,7 +1,8 @@
 """`moshi-cockpit install`: idempotent; every file change goes through BackupStore, so `uninstall` can restore it.
 
 Herdr itself comes from its vendor: install refuses to run without /Applications/Herdr.app and never downloads,
-replaces or verifies it (doctor reports versions this release was not tested with).
+replaces or verifies it (doctor reports versions this release was not tested with). A headless Linux machine has
+no Herdr app: Herdr on the Mac drives it, so install sets up only the servers, the launcher and the agents there.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from cockpit.registry import Agent, load_agents, save_agents
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 HERDR_MISSING = f"Install Herdr from {compat.HERDR_URL} first, then run this again."
+HEADLESS_NOTE = ("Headless install: no Herdr app on this machine. Start its agents from Herdr on your Mac "
+                 "(+ Agent → New, Where: this machine)")
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,8 @@ def show_cockpit_layout(paths: Paths, runner: Runner) -> str:
 def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.run,
         say: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], float] = time.monotonic) -> List[str]:
+    if ctx.paths.headless:
+        return _run_headless(ctx, options)
     if not ctx.paths.herdr_app_bundle.is_dir():
         raise ValueError(HERDR_MISSING)  # before anything is written
     moved = legacy.import_config(ctx.paths, ctx.backup, ctx.keychain)  # before this install writes its own
@@ -199,14 +204,8 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
     notes.append(defaults.sync_agent_menu(ctx.paths, ctx.backup))
     if ready:  # otherwise the last note says what to do, once
         notes.append(defaults.install_cockpit_layout(ctx.paths, ctx.backup))
-    linked = agents.link_launchers(ctx)
-    notes.append("Launchers linked: " + (", ".join(linked) if linked else "unchanged"))
-    servers = {name: with_default_path(name, url) if url else url
-               for name, url in (("moshi", options.moshi), ("ocellio", options.ocellio)) if url is not None}
-    if servers:
-        changed = save_servers(ctx.paths, ctx.backup, servers)
-        notes.append("Servers: " + ", ".join(f"{n} {u or '(removed)'}" for n, u in servers.items())
-                     + ("" if changed else ", unchanged"))
+    notes.append(_link_launchers(ctx))
+    notes.extend(_save_servers(ctx, options))
     notes.extend(migrate(ctx))
     notes.extend(setup_agents(ctx))
     if first_start:
@@ -214,3 +213,27 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
     if moved:
         notes.append(legacy.FOUND)
     return notes
+
+
+def _run_headless(ctx: AgentContext, options: InstallOptions) -> List[str]:
+    """No Herdr app here: no legacy import, telemetry, mods, menu, layout or Herdr start."""
+    notes = [HEADLESS_NOTE]
+    notes.extend(_save_servers(ctx, options))
+    notes.append(_link_launchers(ctx))
+    notes.extend(setup_agents(ctx))
+    return notes
+
+
+def _link_launchers(ctx: AgentContext) -> str:
+    linked = agents.link_launchers(ctx)
+    return "Launchers linked: " + (", ".join(linked) if linked else "unchanged")
+
+
+def _save_servers(ctx: AgentContext, options: InstallOptions) -> List[str]:
+    servers = {name: with_default_path(name, url) if url else url
+               for name, url in (("moshi", options.moshi), ("ocellio", options.ocellio)) if url is not None}
+    if not servers:
+        return []
+    changed = save_servers(ctx.paths, ctx.backup, servers)
+    return ["Servers: " + ", ".join(f"{n} {u or '(removed)'}" for n, u in servers.items())
+            + ("" if changed else ", unchanged")]

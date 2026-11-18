@@ -165,6 +165,7 @@ class ReleaseTest(unittest.TestCase):
         notes = (self.dist / "notes.md").read_text()
         self.assertIn("curl -fsSL https://github.com/pcas-io/moshi-cockpit/releases/latest/download/install.sh | sh",
                       notes)
+        self.assertIn("Linux machine (x86_64 or aarch64, headless)", notes)
         self.assertIn(sums.strip(), notes)
         archive = [c for c in self.git_calls() if c[1] == "archive"][0]
         self.assertEqual(archive[-5:], [TAG, "cockpit", "bin", "share", "LICENSE"])

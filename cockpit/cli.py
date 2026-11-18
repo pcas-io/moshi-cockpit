@@ -196,7 +196,7 @@ def cmd_install(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
-    """Undoes every change outside the person's own settings folder; that folder and the Keychain stay."""
+    """Undoes every change outside the person's own settings folder; that folder and the tokens stay."""
     settings = paths.mesh_config.parent
     notes = BackupStore(paths.state).restore_all(keep=settings)
     for note in notes or ["nothing to restore"]:
@@ -206,11 +206,18 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
     def short(path: Path) -> str:
         return "~/" + str(path.relative_to(paths.home)) if paths.home in path.parents else str(path)
 
-    print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), the Keychain entries "
-          f"(moshi-… and ocellio-…), the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself. "
+    if paths.headless:
+        store = default_store(lambda: "Linux", paths.home)
+        tokens = f"the tokens in {store.name}"
+        delete = f"delete {short(paths.secrets_file)} (or the moshi-cockpit entries in your keyring)"
+    else:
+        tokens = "the Keychain entries (moshi-… and ocellio-…)"
+        delete = "delete the moshi-… and ocellio-… entries in Keychain Access"
+    print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), {tokens}, "
+          f"the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself. "
           f"Earlier copies of your settings (*.bak-…) stay in {short(settings)}/ too.")
-    print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, delete the moshi-… "
-          "and ocellio-… entries in Keychain Access, and revoke this installation in the moshi dashboard.")
+    print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, {delete}, "
+          "and revoke this installation in the moshi dashboard.")
     return 0
 
 

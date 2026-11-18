@@ -22,11 +22,11 @@ against, and [RECIPE.md](RECIPE.md) for the Herdr mod gallery entry.
 
 ## Requirements
 
-- macOS on Apple silicon. Windows and Linux follow later; the installer stops with a message on them.
+- macOS on Apple silicon; remote Linux machines (x86_64, aarch64) headless. Windows follows.
 - Herdr, installed first from [herdr.dev](https://herdr.dev). The cockpit never downloads Herdr. The Herdr
   versions this release was tested with are listed in `cockpit/compat.py`; any other version only produces a
   warning in `moshi-cockpit doctor`.
-- `curl`, `shasum`, `tar` (all part of macOS).
+- `curl`, `shasum`, `tar` (all part of macOS); on a Linux machine `curl`, `tar` and `sha256sum` (or `shasum`).
 - Optional: an address for moshi and one for ocellio. The installer asks for them; leave them empty to use
   Herdr without them. On an update it shows the address set now, and an empty answer keeps it.
 
@@ -153,6 +153,23 @@ not connected are listed and checked once Herdr reports them connected while the
 opens. A machine added a moment ago says that Herdr is still starting herdr-core there; if the dialog closed
 during an add, the next Machines tab shows how it ended.
 
+## Linux machines
+
+A Linux machine that Herdr on your Mac reaches runs moshi-cockpit headless: no Herdr app there, its agents get
+their own moshi identity and you start them from Herdr on the Mac.
+
+1. Add the machine under **Machines** (see above).
+2. **Install moshi-cockpit** in its row. A tab on that machine runs the same install line as on the Mac; it picks
+   the pinned Python for x86_64 or aarch64, checks every download's SHA-256 and puts everything under `~/.local`,
+   without `sudo`.
+3. **Connect to moshi** in its row. The tab there prints a link and a code; approve it in the browser on your Mac
+   or phone. The installation is named after the machine.
+4. **+ Agent → New** with **Where** set to that machine creates an agent there.
+
+Tokens on a Linux machine go to the Secret Service (libsecret) when it works, otherwise to
+`~/.config/moshi-cockpit/secrets.json` with mode 0600; `moshi-cockpit doctor` there names the store. See
+[docs/security.md](docs/security.md#tokens-on-linux-machines).
+
 ## Spaces
 
 In the cockpit layout, Herdr's spaces list is replaced by `mesh-spaces`, a copy of it with these additions:
@@ -237,7 +254,8 @@ backup is missing is left as it is and named in the output. What stays, so that 
 you left off:
 
 - your settings in `~/.config/moshi-cockpit/` (`config.json`, `agents.json`, `rules.md`),
-- the Keychain entries (`moshi-…` and `ocellio-…`, see [docs/security.md](docs/security.md)),
+- the Keychain entries (`moshi-…` and `ocellio-…`, see [docs/security.md](docs/security.md)); on a Linux machine
+  the tokens in its store (`secrets.json` or your keyring),
 - the downloaded app in `~/.local/share/moshi-cockpit/` and the state folder `~/.local/state/moshi-cockpit/`,
 - Herdr itself.
 
