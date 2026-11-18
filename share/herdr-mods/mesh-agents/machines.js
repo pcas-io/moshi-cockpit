@@ -1,7 +1,13 @@
 // "+ Agent" → Machines: what the tab makes of `machine list --json` and `machine inventory --json`, and the tabs
-// its buttons open. Pure, so `node --test` can load it (tests/js/machines.test.mjs); the view is machines-view.js.
+// its buttons open; "+ Agent" → New on another machine. Pure, so `node --test` can load it
+// (tests/js/machines.test.mjs); the views are machines-view.js and main.js.
 
 import { plain } from "./rules.js";
+import { HERDR_APP } from "./harnesses.js";
+
+// Our six harnesses → Herdr's program key in knownAgents() (opencode is "opencode" there, read from a real
+// herdr-app's knownAgents() answer).
+export const HERDR_KEYS = { ...HERDR_APP, opencode: "opencode" };
 
 export const STATE_TEXT = { ready: "Ready", installed: "Installed, not signed in", missing: "Missing" };
 
@@ -64,4 +70,29 @@ export function tabCommand(spaces, machine, name, argv) {
 // 2FA prompts appear there.
 export function addHostCommand(spaces, cli, alias) {
   return tabCommand(spaces, null, `Add ${alias}`, [cli, "machine", "add", alias]);
+}
+
+// "+ Agent" → New: where the agent starts. This Mac, then each machine whose layout Herdr has read; a name hc
+// could read as an option never reaches knownAgents({on}) or space.new {machine}.
+export function whereChoices(ms) {
+  const remote = (ms ?? []).filter((m) => m?.name != null && m.layout === "ready" && passable(m.name));
+  return [{ name: null, label: "This Mac" }, ...remote.map((m) => ({ name: m.name, label: m.name }))];
+}
+
+// The harness chips for another machine, from its inventory rows: ready and installed (the first start signs
+// in) can start; missing is explained.
+export function remoteChips(rows, machine) {
+  return (Array.isArray(rows) ? rows : []).filter((r) => Object.prototype.hasOwnProperty.call(HERDR_KEYS, r?.name)).map((r) => ({
+    name: r.name, label: plain(r.label, 40),
+    selectable: r.state === "ready" || r.state === "installed",
+    note: r.state === "missing" ? `missing on ${machine}: install it under Machines` : "",
+  }));
+}
+
+// space.new's arguments: Herdr's own command when its check on that machine finds the harness, else the
+// inventory's start command. Nothing goes to moshi or agents.json.
+export function remoteStart(machine, row, known) {
+  const app = (known ?? []).find((a) => a?.key === HERDR_KEYS[row.name]);
+  const argv = app?.installed && Array.isArray(app.run) && app.run.length > 0 ? app.run : row.start_argv;
+  return { machine, name: plain(row.label, 40), argv };
 }

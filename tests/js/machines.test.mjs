@@ -1,8 +1,8 @@
 // The Machines tab of "+ Agent": machine rows, harness actions and the tabs they open. Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { STATE_TEXT, addHostCommand, harnessAction, hostRows, inventoryArgs, machineRows, passable, tabCommand }
-  from "../../share/herdr-mods/mesh-agents/machines.js";
+import { HERDR_KEYS, STATE_TEXT, addHostCommand, harnessAction, hostRows, inventoryArgs, machineRows, passable,
+         remoteChips, remoteStart, tabCommand, whereChoices } from "../../share/herdr-mods/mesh-agents/machines.js";
 
 const CLI = "/Users/x/.local/bin/moshi-cockpit";
 const HELD = (cmd) => ["/bin/sh", "-lc", `${cmd}; read -r _`];
@@ -112,4 +112,54 @@ test("add host command runs the CLI in a visible tab", () => {
   assert.equal(rows[2].label.length, 254);
   assert.equal(rows.length, 3);  // nothing to show for an empty entry
   assert.deepEqual(hostRows(undefined), []);
+});
+
+test("where choices list ready machines after this Mac", () => {
+  const ms = [{ name: null, layout: "ready" }, { name: "devbox", layout: "ready" }, { name: "build-1", layout: "loading" },
+              { name: "build-2", layout: "unavailable" }, { name: "build-3", layout: "ready" }];
+  assert.deepEqual(whereChoices(ms), [{ name: null, label: "This Mac" }, { name: "devbox", label: "devbox" },
+                                      { name: "build-3", label: "build-3" }]);
+  // no machines() answer: this Mac alone
+  assert.deepEqual(whereChoices(undefined), [{ name: null, label: "This Mac" }]);
+  assert.deepEqual(whereChoices([]), [{ name: null, label: "This Mac" }]);
+  // a name hc could read as an option or shell text never reaches knownAgents({on}) or space.new {machine}
+  const odd = ["-oProxyCommand=x", "a b", "a;b", "$(x)", "", 7].map((name) => ({ name, layout: "ready" }));
+  assert.deepEqual(whereChoices(odd), [{ name: null, label: "This Mac" }]);
+});
+
+test("remote chips allow installed and ready, explain missing", () => {
+  const rows = [row("ready", { name: "claude", label: "Claude Code" }), row("installed"),
+                row("missing", { name: "opencode", label: "OpenCode" })];
+  assert.deepEqual(remoteChips(rows, "devbox"), [
+    { name: "claude", label: "Claude Code", selectable: true, note: "" },
+    { name: "codex", label: "Codex", selectable: true, note: "" },
+    { name: "opencode", label: "OpenCode", selectable: false, note: "missing on devbox: install it under Machines" },
+  ]);
+  // no inventory yet (loading or failed): no chips, never a guessed "Ready"
+  assert.deepEqual(remoteChips(null, "devbox"), []);
+  // only the six harnesses, and nothing selectable from a state the inventory does not know
+  assert.deepEqual(remoteChips([row("ready", { name: "pi" })], "devbox"), []);
+  assert.equal(remoteChips([row("broken")], "devbox")[0].selectable, false);
+  assert.equal(remoteChips([row("ready", { label: "Co\u001b[2Jdex" })], "devbox")[0].label, "Co [2Jdex");
+});
+
+test("remote start uses Herdr's own command when it knows the harness", () => {
+  assert.deepEqual(HERDR_KEYS, { claude: "claude", codex: "codex", vibe: "vibe", agy: "antigravity", grok: "grok",
+                                 opencode: "opencode" });
+  const known = [{ key: "codex", name: "Codex", run: ["codex"], installed: true },
+                 { key: "antigravity", name: "Antigravity", run: ["agy", "--x"], installed: true }];
+  assert.deepEqual(remoteStart("devbox", row("ready"), known), { machine: "devbox", name: "Codex", argv: ["codex"] });
+  // our key → Herdr's key (agy is "antigravity" there)
+  assert.deepEqual(remoteStart("build-1", row("installed", { name: "agy", label: "Antigravity" }), known).argv, ["agy", "--x"]);
+});
+
+test("remote start falls back to the inventory's start argv", () => {
+  const start = ["/bin/sh", "-lc", "exec codex"];
+  // Herdr knows it, but its shell does not find it there
+  assert.deepEqual(remoteStart("devbox", row("ready"), [{ key: "codex", run: ["codex"], installed: false }]),
+                   { machine: "devbox", name: "Codex", argv: start });
+  // Herdr does not know it, or knownAgents() failed, or gave no command
+  assert.deepEqual(remoteStart("devbox", row("ready"), [{ key: "claude", run: ["claude"], installed: true }]).argv, start);
+  assert.deepEqual(remoteStart("devbox", row("ready"), null).argv, start);
+  assert.deepEqual(remoteStart("devbox", row("ready"), [{ key: "codex", run: [], installed: true }]).argv, start);
 });
