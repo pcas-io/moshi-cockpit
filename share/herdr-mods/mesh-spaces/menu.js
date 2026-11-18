@@ -15,6 +15,11 @@ export function writes(pins, groups, next) {
   return { writes: out };
 }
 
+// Our "+ Agent" dialog on its Machines tab with `machine`'s row highlighted: where a machine's warning (a login it
+// needs, agents that stop when you disconnect) is fixed. Opened from a machine header, not from this menu.
+export const machinesDialog = (machine) => ({ mod: "mesh-agents", kind: "dialog", width: 640, height: 460,
+                                              props: { view: "new", tab: "machines", focus: machine } });
+
 // Herdr's own space menu, opened exactly as its spaces mod does.
 const herdrMenu = (id) => ({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id } } });
 

@@ -72,10 +72,27 @@ class MachinesTest(unittest.TestCase):
         found = machines.list_machines(self.paths, runner)
         self.assertEqual(runner.calls, [([self.hc, "machine", "ls", "--json"], machines.LIST_TIMEOUT)])
         self.assertEqual(found["machines"], [
-            {"name": "devbox", "state": "connected", "target": "me@devbox"},
-            {"name": "build-1", "state": "asleep", "target": "me@build-1"}])
+            {"name": "devbox", "state": "connected", "target": "me@devbox", "keeps_running_after_logout": None,
+             "logout_linger_user": None},
+            {"name": "build-1", "state": "asleep", "target": "me@build-1", "keeps_running_after_logout": None,
+             "logout_linger_user": None}])
         self.assertEqual(found["ssh_hosts"], ["lab-2"])
         self.assertNotIn("problem", found)
+
+    def test_list_carries_hc_s_logout_answer_and_only_a_passable_linger_user(self):
+        def linger(keeps, user, name="devbox"):
+            return dict(machine(name), keeps_running_after_logout=keeps, logout_linger_user=user)
+        runner = FakeRunner(listings=[[linger(False, "me"), linger(True, None, "build-1"), linger(None, "me", "m3"),
+                                       linger(False, "-oProxyCommand=x", "m4"), linger(False, "a b", "m5"),
+                                       linger(False, "a;b", "m6"), linger("no", 7, "m7"), machine("m8")]])
+        rows = machines.list_machines(self.paths, runner)["machines"]
+        self.assertEqual([(r["keeps_running_after_logout"], r["logout_linger_user"]) for r in rows], [
+            (False, "me"), (True, None), (None, "me"),
+            (False, None), (False, None), (False, None),  # a user hc or a shell could misread is never passed on
+            (None, None), (None, None)])  # neither a bool nor a string: unknown
+        bare = {"name": "devbox", "state": "connected", "target": "me@devbox"}  # an older hc without the fields
+        row = machines.list_machines(self.paths, FakeRunner(listings=[[bare]]))["machines"][0]
+        self.assertEqual((row["keeps_running_after_logout"], row["logout_linger_user"]), (None, None))
 
     def test_an_ssh_alias_is_known_by_name_host_target_or_target_host(self):
         self.ssh_config("Host a1 a2 a3 a4 lab-2\n")
@@ -398,6 +415,8 @@ class MachineCliTest(unittest.TestCase):
         code, out, _ = self.run_cli(["machine", "list", "--json"], runner)
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["ssh_hosts"], ["lab-2"])
+        self.assertEqual(json.loads(out)["machines"][0]["keeps_running_after_logout"], None)
+        self.assertIn("logout_linger_user", json.loads(out)["machines"][0])
         code, out, _ = self.run_cli(["machine", "list"], runner)
         self.assertEqual(code, 0)
         self.assertIn("devbox", out)

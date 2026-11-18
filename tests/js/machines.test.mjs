@@ -1,9 +1,10 @@
 // The Machines tab of "+ Agent": machine rows, harness actions and the tabs they open. Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COLUMNS, GLYPH, HERDR_KEYS, INVENTORY_EXEC, LEGEND, REMOVE_EXEC, STATE_TEXT, addHostCommand, cellAction, connectingNote,
-         connectingText, harnessAction, hostRows, inventoryArgs, layoutReady, machineRemoveArgs, machineRows, matrixRow, passable,
-         remoteChips, remoteStart, removeQuestion, tabCommand, typedTarget, whereChoices }
+import { COLUMNS, GLYPH, HERDR_KEYS, INVENTORY_EXEC, LEGEND, LINGER_NOTE, LOGIN_NOTE, REMOVE_EXEC, STATE_TEXT, addHostCommand,
+         cellAction, connectingNote, connectingText, fixCommand, focusName, harnessAction, hostRows, inventoryArgs, layoutReady,
+         lingerArgv, lingerCommand, lingerQuestion, loginArgv, loginCommand, machineRemoveArgs, machineRows, machineWarning,
+         matrixRow, passable, remoteChips, remoteStart, removeQuestion, tabCommand, typedTarget, whereChoices }
   from "../../share/herdr-mods/mesh-agents/machines.js";
 import { readFileSync } from "node:fs";
 
@@ -39,10 +40,13 @@ test("machine rows put this Mac first and explain disconnected machines", () => 
                                         { name: "build-1", state: "needs_login", target: "me@build-1" }],
                              ssh_hosts: [] });
   assert.equal(rows.length, 3);
-  assert.deepEqual(rows[0], { name: null, label: "This Mac", connected: true, note: "", removable: false, connecting: false });
-  assert.deepEqual(rows[1], { name: "devbox", label: "devbox", connected: true, note: "", removable: true, connecting: false });
+  assert.deepEqual(rows[0], { name: null, label: "This Mac", connected: true, note: "", removable: false, connecting: false,
+                              warning: null });
+  assert.deepEqual(rows[1], { name: "devbox", label: "devbox", connected: true, note: "", removable: true, connecting: false,
+                              warning: null });
   assert.deepEqual(rows[2], { name: "build-1", label: "build-1", connected: false,
-                              note: "needs login: inventory once it is connected", removable: true, connecting: false });
+                              note: "needs login: inventory once it is connected", removable: true, connecting: false,
+                              warning: { note: "needs a login", action: { kind: "login", label: "Log in" } } });
   // no list (Herdr's machine list was not available): this Mac alone
   assert.deepEqual(machineRows(null).map((r) => r.label), ["This Mac"]);
   assert.deepEqual(machineRows({ machines: [], problem: "x" }).map((r) => r.label), ["This Mac"]);
@@ -301,14 +305,15 @@ test("matrix row: notes replace the cells", () => {
   const asleep = matrixRow({ name: "build-1", label: "build-1", connected: false, note: "asleep: inventory once it is connected" },
                            undefined, false, ago);
   assert.deepEqual(asleep, { label: "build-1", status: "", note: "asleep: inventory once it is connected", error: "",
-                             refresh: false, loading: false, cells: [] });
+                             refresh: false, loading: false, cells: [], warning: null });
   const odd = matrixRow({ name: "a b", label: "a b", connected: false, note: "name not supported" },
                         inv(six(Array(6).fill("ready"))), true, ago);
   assert.equal(odd.note, "name not supported");
   assert.deepEqual(odd.cells, []);
   // first check running
   assert.deepEqual(matrixRow(DEVBOX, { loading: true, error: null }, true, ago),
-                   { label: "devbox", status: "Checking\u2026", note: "", error: "", refresh: true, loading: true, cells: [] });
+                   { label: "devbox", status: "Checking\u2026", note: "", error: "", refresh: true, loading: true, cells: [],
+                     warning: null });
   assert.equal(matrixRow(MAC, undefined, true, ago).status, "");
   // the machine did not answer: one error line, nothing shown as Ready
   const failed = matrixRow(DEVBOX, { loading: false, data: null, error: "devbox did not answer: timeout" }, true, ago);
@@ -336,7 +341,7 @@ test("a machine just added says it is connecting, offers Refresh, and only while
                             { name: "lab-2", state: "unreachable" }] };
   const rows = machineRows(list, new Set(["devbox", "build-1"]));
   assert.deepEqual(rows[1], { name: "devbox", label: "devbox", connected: false, note: connectingText("devbox"),
-                              removable: true, connecting: true });
+                              removable: true, connecting: true, warning: null });
   assert.equal(connectingText("devbox"), "Connecting: Herdr is starting herdr-core on devbox. This can take a minute or two; "
                                          + "the row fills in by itself once it answers.");
   assert.equal(rows[2].connecting, false);  // connected already: the inventory shows
@@ -354,4 +359,88 @@ test("removing a machine asks first and passes only a checked name", () => {
   assert.ok(REMOVE_EXEC.timeout > guard * 1000, `${REMOVE_EXEC.timeout} > ${guard * 1000}`);
   const view = readFileSync(new URL("../../share/herdr-mods/mesh-agents/machines-view.js", import.meta.url), "utf8");
   assert.match(view, /machineRemoveArgs\([^)]*\), true, REMOVE_EXEC\)/);
+});
+
+// A machine of Herdr's list with hc's logout answer.
+const herdr = (name, state, keeps, user) => ({ name, state, target: `me@${name}`, keeps_running_after_logout: keeps,
+                                               logout_linger_user: user });
+const HC = "/Users/x/.local/bin/herdr-core";
+const HOLD = 'code=$?; printf "\\nFinished (exit %s). Press Enter to close.\\n" "$code"; read -r _';
+
+test("a machine's warning: a login it needs offers Log in, agents that stop on disconnect offer Fix", () => {
+  const rows = machineRows({ machines: [herdr("devbox", "needs_login", false, "me"), herdr("build-1", "connected", false, "me"),
+                                        herdr("lab-2", "asleep", false, "me"), herdr("lab-3", "connected", true, "me"),
+                                        herdr("lab-4", "connected", null, null), herdr("a b", "needs_login", false, "me")] });
+  assert.equal(rows[0].warning, null);  // This Mac
+  // a login comes first: without it nothing runs there, the fix included
+  assert.deepEqual(rows[1].warning, { note: LOGIN_NOTE, action: { kind: "login", label: "Log in" } });
+  const fix = { note: LINGER_NOTE, action: { kind: "linger", label: "Fix", user: "me" } };
+  assert.deepEqual([rows[2].warning, rows[3].warning], [fix, fix]);
+  assert.deepEqual([rows[4].warning, rows[5].warning], [null, null]);  // keeps running, or unknown
+  assert.equal(rows[6].warning, null);  // a name hc could misread gets no action at all
+  assert.equal(LOGIN_NOTE, "needs a login");
+  assert.equal(LINGER_NOTE, "agents stop when you disconnect");
+  // a user hc or a shell could misread: the warning stays, without Fix
+  for (const user of ["-oProxyCommand=x", "a b", "a;b", "$(x)", "", null, 7]) {
+    assert.deepEqual(machineWarning(herdr("devbox", "connected", false, user)), { note: LINGER_NOTE, action: null }, String(user));
+  }
+  for (const keeps of [true, null, undefined, "false", 0]) {
+    assert.equal(machineWarning(herdr("devbox", "connected", keeps, "me")), null, String(keeps));
+  }
+});
+
+test("matrix row: a warning replaces the note of a machine that is not connected; a connected one keeps its cells", () => {
+  const [, login, linger, asleep] = machineRows({ machines: [herdr("devbox", "needs_login", null, null),
+    herdr("build-1", "connected", false, "me"), herdr("lab-2", "asleep", false, "me")] });
+  const r = matrixRow(login, undefined, false, ago);
+  // the row's Refresh asks Herdr's list again after the login
+  assert.deepEqual([r.note, r.refresh, r.cells, r.warning], [LOGIN_NOTE, true, [], login.warning]);
+  const cells = matrixRow(linger, inv(six(Array(6).fill("ready"))), true, ago);
+  assert.equal(cells.cells.length, 6);
+  assert.equal(cells.note, "");
+  assert.deepEqual(cells.warning, linger.warning);
+  const away = matrixRow(asleep, undefined, false, ago);
+  assert.deepEqual([away.note, away.refresh, away.cells], [LINGER_NOTE, false, []]);
+});
+
+test("Log in runs hc machine login in a held tab on this Mac, the name as an argument", () => {
+  const argv = ["/bin/sh", "-lc", `"$1" machine login -- "$2"; ${HOLD}`, "sh", HC, "devbox"];
+  assert.deepEqual(loginArgv(HC, "devbox"), argv);
+  const spaces = [{ id: "devbox/s1", machine: "devbox" }, { id: "s2", machine: null }];
+  assert.deepEqual(loginCommand(spaces, HC, "devbox"), { command: "tab.new", args: { name: "Log in to devbox", argv, space: "s2" } });
+  assert.deepEqual(loginCommand([], HC, "devbox"), { command: "space.new", args: { name: "Log in to devbox", argv } });
+  for (const name of ["-oProxyCommand=x", "a b", "a;b", "", null]) {
+    assert.equal(loginArgv(HC, name), null, String(name));
+    assert.equal(loginCommand(spaces, HC, name), null, String(name));
+  }
+});
+
+test("Fix runs enable-linger with the checked user in a held tab on that machine", () => {
+  assert.equal(lingerCommand("me"), "sudo loginctl enable-linger -- me");
+  const argv = ["/bin/sh", "-lc", `sudo loginctl enable-linger -- "$1"; ${HOLD}`, "sh", "me"];
+  assert.deepEqual(lingerArgv("me"), argv);
+  const spaces = [{ id: "s1", machine: null }, { id: "build-1/s2", machine: "build-1" }];
+  assert.deepEqual(fixCommand(spaces, "build-1", "me"),
+                   { command: "tab.new", args: { name: "Fix build-1", argv, space: "build-1/s2" } });  // never this Mac
+  assert.deepEqual(fixCommand(spaces, "devbox", "me"), { command: "space.new", args: { machine: "devbox", name: "Fix devbox", argv } });
+  for (const user of ["-oProxyCommand=x", "a b", "a;b", "$(x)", "", null]) {
+    assert.equal(lingerArgv(user), null, String(user));
+    assert.equal(fixCommand(spaces, "build-1", user), null, String(user));
+  }
+  assert.equal(fixCommand(spaces, "a b", "me"), null);
+  assert.equal(lingerQuestion("devbox", "me"), "On devbox, programs end when your last login closes. The fix runs "
+    + "`sudo loginctl enable-linger -- me` there, in a tab, and asks for your password on devbox.");
+  // the tab ends like the CLI's held tabs (cockpit/inventory.py held_argv)
+  const py = readFileSync(new URL("../../cockpit/inventory.py", import.meta.url), "utf8");
+  assert.ok(py.includes(HOLD.slice(HOLD.indexOf("printf")).replace(/\\/g, "\\\\")));
+});
+
+test("the Machines tab highlights the machine it was opened for", () => {
+  assert.equal(focusName({ view: "new", tab: "machines", focus: "devbox" }), "devbox");
+  for (const p of [{}, null, undefined, { focus: "-x" }, { focus: "a b" }, { focus: 7 }]) assert.equal(focusName(p), null);
+  const view = readFileSync(new URL("../../share/herdr-mods/mesh-agents/machines-view.js", import.meta.url), "utf8");
+  assert.match(view, /panel\.focus = focusName\(props\(\)\)/);
+  assert.match(view, /panel\.focus === m\.name[\s\S]{0,80}t\.selected/);
+  assert.match(view, /loginCommand\(spaces\(\), hc\(\), m\.name\)/);
+  assert.match(view, /fixCommand\(spaces\(\), m\.name, ask\.user\)/);
 });

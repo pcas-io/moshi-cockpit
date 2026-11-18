@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { GROUPS, PINS, addToGroup, blocks, dropAction, filterRows, matches, nameRefusal, newGroup, pin, prune, removeFromGroup, sections,
          unpin, validEntries }
   from "../../share/herdr-mods/mesh-spaces/organize.js";
-import { act, groupAction, menuItems, writes } from "../../share/herdr-mods/mesh-spaces/menu.js";
+import { act, groupAction, machinesDialog, menuItems, writes } from "../../share/herdr-mods/mesh-spaces/menu.js";
 
 // A row as ordered() makes it: the space, its index, its git, its tree mark (null for a checkout).
 const space = (id, extra = {}) => ({ id, name: id.split("/").pop(), folder: "", branch: null, machine: null, ...extra });
@@ -337,4 +337,18 @@ test("rows and group headers take drops through dropAction", async () => {
   assert.match(source, /groupHead\(s, m, folded, filtering, t\) \{[\s\S]{0,1500}on_mouse_up\("left"[\s\S]{0,120}this\.land\(this\.dropOn\(target, m\)\)/);
   assert.equal((source.match(/this\.land\(/g) ?? []).length, 2);
   assert.ok(source.split("\n").length <= 700);
+});
+
+test("a machine's warnings open the Machines tab of our agents dialog", async () => {
+  assert.deepEqual(machinesDialog("devbox"), { mod: "mesh-agents", kind: "dialog", width: 640, height: 460,
+                                               props: { view: "new", tab: "machines", focus: "devbox" } });
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../../share/herdr-mods/mesh-spaces/main.js", import.meta.url), "utf8");
+  // ⚠ (agents stop on disconnect), the rail's login click and the full list's Log in: ours, not Herdr's dialogs
+  assert.doesNotMatch(source, /mod: "machine-add"/);
+  assert.doesNotMatch(source, /section: "machines"/);
+  assert.equal((source.match(/openOverlay\(machinesDialog\(m\)\)/g) ?? []).length, 3);
+  assert.match(source, /machine-logout-\$\{m\}`\)[\s\S]{0,250}openOverlay\(machinesDialog\(m\)\)/);
+  assert.match(source, /machine-login-open-\$\{m\}`\)[\s\S]{0,300}openOverlay\(machinesDialog\(m\)\)[\s\S]{0,80}"Log in"/);
+  assert.match(source, /machine-login-copy-\$\{m\}`\)/);  // Copy stays
 });
