@@ -445,6 +445,8 @@ class HerdrFromTheVendorTest(unittest.TestCase):
         self.assertEqual(compat.installed_versions(ctx.paths), ("0.1.13", None))
         self.assertEqual(compat.check("0.1.13", None), [compat.Finding("herdr", compat.OK, "Herdr 0.1.13 (tested)")])
         self.assertEqual(compat.check("0.1.16", None), [compat.Finding("herdr", compat.OK, "Herdr 0.1.16 (tested)")])
+        # herdr-core 0.1.21: the 0.3.1 acceptance ran on it
+        self.assertEqual({f.status for f in compat.check("0.1.16", "0.1.21")}, {compat.OK})
 
     def test_doctor_has_no_admin_or_cockpit_identity_checks(self):
         token = "bt_TOKEN_cccccccc"

@@ -1,17 +1,21 @@
-// "+ Agent" → Machines: this Mac and Herdr's machines, the six harnesses on each (`machine inventory`), and the
-// ssh hosts not added yet (`machine add` in a visible tab). Opening the tab asks once; "Refresh" asks one machine
-// again; nothing polls. Install and Sign in open a tab where the command runs (on that machine for a remote one).
-// The logic lives in machines.js (tested with node); `panel` is the MeshAgents dialog, which keeps the state.
+// "+ Agent" → Machines: a matrix of this Mac and Herdr's machines (rows) by the six harnesses (columns,
+// `machine inventory`), and the ssh hosts not added yet as chips (`machine add` in a visible tab). Opening the tab
+// asks once; "Refresh" asks one machine again; nothing polls. A Sign in or Install cell opens a tab where the
+// command runs (on that machine for a remote one). Fixed row height and column widths, so This Mac, six machines
+// and the hosts fit the 640×460 dialog without scrolling. The logic lives in machines.js (tested with node);
+// `panel` is the MeshAgents dialog, which keeps the state.
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, home, run, props, closeOverlay, spaces, machines } from "herdr";
 import { ago, btn, cockpit, plain } from "./util.js";
-import { INVENTORY_EXEC, STATE_TEXT, addHostCommand, connectingNote, harnessAction, hostRows, inventoryArgs, layoutReady, machineRows,
-         tabCommand } from "./machines.js";
+import { COLUMNS, GLYPH, INVENTORY_EXEC, LEGEND, addHostCommand, cellAction, hostRows, inventoryArgs, layoutReady, machineRows,
+         matrixRow, tabCommand } from "./machines.js";
 
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
 const keyOf = (name) => name ?? "";
+const ROW_H = 26;  // every machine row, whatever it shows: a 14 px name line over a 12 px status line
+const CELL_W = 46;  // every harness column; the machine column takes the rest
 
 function inspect(panel, name, refresh, cx) {
   const key = keyOf(name);
@@ -76,62 +80,105 @@ function addHost(alias) {
   closeOverlay(props().overlay);
 }
 
+const glyphColor = (t, show) => (show === "ready" ? t.ansi2 ?? t.done : show === "sign-in" ? t.foreground : t.muted);
+
 function note(t, text, color = t.dim) {
-  return div().text_size(12).text_color(color).child(text);
+  return div().text_size(11).text_color(color).truncate().child(text);
 }
 
-function askRow(panel, t, m, h, action, id) {
-  return v_flex().w_full().gap(6).px(8).py(6).rounded(6).bg(t.raised).flex_none()
-    .child(note(t, plain(action.confirm, 400), t.foreground))
-    .child(h_flex().gap(6)
-      .child(btn(`${id}-yes`, t, "Install", () => openTab(m.name, plain(h.label, 40), action), { primary: true }))
-      .child(btn(`${id}-no`, t, "Cancel", (_e, cx) => { panel.machineAsk = null; cx.notify(); })));
+function legend(t) {
+  return h_flex().h(14).flex_none().gap(12).px(6).items_center().text_size(10.5).text_color(t.dim)
+    .children(LEGEND.map((l) => h_flex().gap(4).items_center()
+      .child(div().text_color(glyphColor(t, l.show)).child(GLYPH[l.show])).child(l.text)));
 }
 
-function harnessLine(panel, t, m, h, id, ready) {
-  const action = harnessAction(h, m.name, ready);
-  const asking = !!action.kind && panel.machineAsk?.machine === m.name && panel.machineAsk?.harness === h.name;
-  return v_flex().w_full().gap(4).flex_none()
-    .child(h_flex().w_full().min_w_0().gap(8).px(8).py(2).items_center()
-      .child(div().w(120).flex_shrink_0().text_size(13).text_color(t.foreground).truncate().child(plain(h.label, 40)))
-      .child(div().flex_1().min_w_0().text_size(12).text_color(h.state === "ready" ? t.foreground : t.dim).truncate()
-        .child(STATE_TEXT[h.state] ?? plain(h.state_text, 60)))
-      .when(!!action.note, (el) => el.child(div().flex_shrink_0().text_size(11).text_color(t.dim).child(action.note)))
-      .when(!!action.kind, (el) => el.child(btn(id, t, action.label, (_e, cx) => act(panel, m, h, action, cx), { on: asking }))))
-    .when(asking, (el) => el.child(askRow(panel, t, m, h, action, `${id}-ask`)));
+function headerRow(t) {
+  return h_flex().w_full().h(16).flex_none().items_center().text_size(10.5).text_color(t.dim)
+    .child(div().flex_1().min_w_0().px(6).child("Machine"))
+    .children(COLUMNS.map((c) => div().w(CELL_W).flex_none().text_center().truncate().child(c.short)));
 }
 
-function machineSection(panel, t, m, index) {
+// A cell: ● ready, ◐ sign in, ○ install, or empty; the state and what a click does in its tooltip.
+function cell(panel, t, m, h, c, id) {
+  const el = div().id(id).w(CELL_W).h(ROW_H).flex_none().flex().items_center().justify_center().rounded(5).text_size(13)
+    .when(!!c.hint, (e) => e.tooltip(c.hint));
+  if (!c.show) return el;
+  const glyph = el.text_color(glyphColor(t, c.show)).child(GLYPH[c.show]);
+  if (!c.action.kind) return glyph;
+  const asking = panel.machineAsk?.machine === m.name && panel.machineAsk?.harness === c.name;
+  return glyph.cursor_pointer().when(asking, (e) => e.bg(t.raised)).hover((s) => s.bg(t.hover))
+    .on_click((_e, cx) => act(panel, m, h, c.action, cx));
+}
+
+function machineCell(panel, t, m, r, id) {
+  return v_flex().flex_1().min_w_0().h(ROW_H).px(6).justify_center()
+    .child(div().text_size(12.5).line_height("14px").font_semibold().text_color(m.connected ? t.foreground : t.dim).truncate()
+      .child(m.label))
+    .when(r.refresh, (el) => el.child(h_flex().w_full().min_w_0().gap(6).items_center().text_size(10).line_height("12px")
+      .child(div().id(`${id}-status`).flex_1().min_w_0().text_color(t.dim).truncate().when(!!r.status, (e) => e.tooltip(r.status))
+        .child(r.status))
+      .child(div().id(`${id}-refresh`).flex_none().rounded(3).text_color(r.loading ? t.dim : t.muted)
+        .when(!r.loading, (e) => e.cursor_pointer().hover((s) => s.text_color(t.foreground))
+          .on_click((_e, cx) => refreshMachine(panel, m.name, cx)))
+        .child("Refresh"))));
+}
+
+// One machine, one fixed-height row: the machine cell, then six cells or one line (a note or an error) across them.
+function machineRow(panel, t, m, index) {
   const inv = m.connected ? panel.inventory?.[keyOf(m.name)] : null;  // never an unsupported name's key
+  const r = matrixRow(m, inv, layoutReady(machines(), m.name), ago);  // a tab opens there only once Herdr can
   const id = `machine-${index}`;
-  const status = !m.connected ? m.note : inv?.loading ? "Checking…" : inv?.data ? `checked ${ago(inv.data.checked_at)}` : "";
-  const ready = layoutReady(machines(), m.name);  // Install and Sign in open a tab there: only once Herdr can
-  return v_flex().id(id).w_full().gap(2).pb(6).flex_none()
-    .child(h_flex().w_full().min_w_0().gap(8).px(8).py(4).items_center()
-      .child(div().flex_shrink_0().font_semibold().text_size(13).text_color(m.connected ? t.foreground : t.dim).child(m.label))
-      .child(div().flex_1().min_w_0().text_size(11).text_color(t.dim).truncate().child(status))
-      .when(m.connected, (el) => el.child(btn(`${id}-refresh`, t, "Refresh", (_e, cx) => refreshMachine(panel, m.name, cx),
-        { enabled: !inv?.loading }))))
-    .when(!!inv?.error, (el) => el.child(div().px(8).child(note(t, inv.error, t.blocked))))
-    .when(!!inv?.data && !ready, (el) => el.child(div().px(8).child(note(t, connectingNote(m.label)))))
-    .children((inv?.data?.harnesses ?? []).map((h) => harnessLine(panel, t, m, h, `${id}-${plain(h.name, 20)}`, ready)));
+  const line = r.error || r.note;
+  const harnesses = inv?.data?.harnesses ?? [];
+  return h_flex().id(id).w_full().h(ROW_H).flex_none().items_center()
+    .child(machineCell(panel, t, m, r, id))
+    .when(r.cells.length > 0, (el) => el.children(r.cells.map((c) =>
+      cell(panel, t, m, harnesses.find((h) => h?.name === c.name), c, `${id}-${c.name}`))))
+    .when(r.cells.length === 0, (el) => el.child(div().id(`${id}-note`).w(CELL_W * COLUMNS.length).flex_none().px(6)
+      .when(!!line, (e) => e.tooltip(line)).child(note(t, line, r.error ? t.blocked : t.dim))));
+}
+
+// The confirm for a remote install, under the matrix: the vendor's command, then Install or Cancel.
+function askRow(panel, t) {
+  const ask = panel.machineAsk;
+  const m = ask && (panel.machines ?? []).find((k) => k.connected && k.name === ask.machine);
+  const h = m && (panel.inventory?.[keyOf(m.name)]?.data?.harnesses ?? []).find((k) => k?.name === ask.harness);
+  const action = h ? cellAction(h, m.name).action : null;
+  if (!action?.confirm || !layoutReady(machines(), m.name)) return null;
+  return h_flex().w_full().gap(8).px(8).py(4).rounded(6).bg(t.raised).items_center().flex_none()
+    .child(div().flex_1().min_w_0().text_size(11.5).text_color(t.foreground).child(plain(action.confirm, 400)))
+    .child(btn("machine-ask-yes", t, "Install", () => openTab(m.name, plain(h.label, 40), action), { primary: true }))
+    .child(btn("machine-ask-no", t, "Cancel", (_e, cx) => { panel.machineAsk = null; cx.notify(); }));
+}
+
+function hostChip(t, h, i) {
+  const el = div().id(`ssh-host-${i}`).h(20).max_w(200).px(7).flex().items_center().rounded(5).border_1().border_color(t.border)
+    .text_size(11.5).text_color(h.ok ? t.foreground : t.dim).truncate();
+  if (!h.ok) return el.border_color(t.dim).tooltip(`${h.label}: ${h.note}`).child(`${h.label} \u00b7 ${h.note}`);
+  return el.cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(`Add ${h.label}`).on_click(() => addHost(h.alias))
+    .child(`+ ${h.label}`);
 }
 
 function hostsSection(panel, t) {
   const hosts = panel.sshHosts;
-  return v_flex().w_full().gap(2).pt(4).flex_none()
-    .child(div().px(8).pb(2).text_size(11).text_color(t.dim).child("From ~/.ssh/config"))
-    .when(hosts === null, (el) => el.child(div().px(8).child(note(t, "Checking…"))))
-    .when(Array.isArray(hosts) && hosts.length === 0, (el) => el.child(div().px(8).child(note(t, "No new hosts in ~/.ssh/config."))))
-    .children((hosts || []).map((h, i) => h_flex().w_full().min_w_0().gap(8).px(8).py(2).items_center().flex_none()
-      .child(div().flex_1().min_w_0().text_size(13).text_color(h.ok ? t.foreground : t.dim).truncate().child(h.label))
-      .when(!h.ok, (el) => el.child(div().flex_shrink_0().text_size(11).text_color(t.dim).child(h.note)))
-      .child(btn(`ssh-host-${i}`, t, "Add", () => addHost(h.alias), { enabled: h.ok }))));
+  const list = Array.isArray(hosts) ? hosts : [];
+  return v_flex().w_full().gap(4).px(6).flex_none()
+    .child(div().h(14).text_size(10.5).text_color(t.dim).child("From ~/.ssh/config"))
+    .when(hosts === null, (el) => el.child(note(t, "Checking…")))
+    .when(Array.isArray(hosts) && hosts.length === 0, (el) => el.child(note(t, "No new hosts in ~/.ssh/config.")))
+    .when(list.length > 0, (el) => el.child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(4)
+      .children(list.map((h, i) => hostChip(t, h, i)))));
 }
 
 export function machinesTab(panel, t) {
-  return v_flex().w_full().flex_1().min_h(0).gap(4).overflow_y_scrollbar()
-    .when(!!panel.machinesProblem, (el) => el.child(div().px(8).flex_none().child(note(t, panel.machinesProblem, t.blocked))))
-    .children((panel.machines ?? []).map((m, i) => machineSection(panel, t, m, i)))
+  const ask = askRow(panel, t);
+  // line_height: one fixed text height for the whole tab, so its rows add up the same on every theme.
+  return v_flex().w_full().flex_1().min_h(0).gap(6).line_height(1.2).overflow_y_scrollbar()
+    .when(!!panel.machinesProblem, (el) => el.child(div().px(6).flex_none().child(note(t, panel.machinesProblem, t.blocked))))
+    .child(legend(t))
+    .child(v_flex().w_full().flex_none()
+      .child(headerRow(t))
+      .children((panel.machines ?? []).map((m, i) => machineRow(panel, t, m, i))))
+    .when(!!ask, (el) => el.child(ask))
     .when(panel.sshHosts !== false, (el) => el.child(hostsSection(panel, t)));
 }

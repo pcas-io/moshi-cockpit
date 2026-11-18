@@ -229,3 +229,14 @@ test("a refused group name says why", () => {
   // a name taken only on another machine is free here
   assert.notEqual(groupAction([], groups, "devbox", "Ops", "devbox/s2", "g-x"), null);
 });
+
+test("the full list has no filler row per empty machine, and the filter field stays", async () => {
+  // main.js imports the host, so the view is checked in its source
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../../share/herdr-mods/mesh-spaces/main.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\.child\("New space there"\)/);
+  assert.match(source, /placeholder: "Filter spaces"/);
+  assert.match(source, /e\.key !== "escape"/);
+  // the machine header's "+" still makes a space there
+  assert.match(source, /machine-add-\$\{m \?\? "local"\}`\)[\s\S]{0,200}run\("space\.new", \{ machine: m \?\? "" \}\)/);
+});

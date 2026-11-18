@@ -1,8 +1,9 @@
 // The Machines tab of "+ Agent": machine rows, harness actions and the tabs they open. Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HERDR_KEYS, INVENTORY_EXEC, STATE_TEXT, addHostCommand, connectingNote, harnessAction, hostRows, inventoryArgs,
-         layoutReady, machineRows, passable, remoteChips, remoteStart, tabCommand, whereChoices }
+import { COLUMNS, GLYPH, HERDR_KEYS, INVENTORY_EXEC, LEGEND, STATE_TEXT, addHostCommand, cellAction, connectingNote, harnessAction,
+         hostRows, inventoryArgs, layoutReady, machineRows, matrixRow, passable, remoteChips, remoteStart, tabCommand,
+         whereChoices }
   from "../../share/herdr-mods/mesh-agents/machines.js";
 import { readFileSync } from "node:fs";
 
@@ -211,4 +212,105 @@ test("install and sign in wait until Herdr has the machine's layout", () => {
   assert.equal(harnessAction(signedOut, "devbox", true).kind, "sign-in");
   assert.equal(harnessAction(signedOut, null, layoutReady(ms, null)).kind, "sign-in");
   assert.equal(connectingNote("build-1"), "Herdr is still connecting to build-1");
+});
+
+// The matrix: one row per machine, one column per harness, fixed widths so every row lines up.
+const MAC = { name: null, label: "This Mac", connected: true, note: "" };
+const DEVBOX = { name: "devbox", label: "devbox", connected: true, note: "" };
+const ago = (iso) => `ago(${iso})`;
+const six = (states) => COLUMNS.map((c, i) => row(states[i], { name: c.name, label: c.name.toUpperCase(),
+  ...(states[i] === "missing" ? { install_argv: HELD("curl x | sh"), install_command: "curl x | sh" } : {}) }));
+const inv = (harnesses, extra = {}) => ({ loading: false, error: null, data: { checked_at: "T", harnesses }, ...extra });
+
+test("matrix columns are the six harnesses with short labels", () => {
+  assert.deepEqual(COLUMNS.map((c) => c.name), ["claude", "codex", "vibe", "agy", "grok", "opencode"]);
+  assert.deepEqual(COLUMNS.map((c) => c.short), ["Claude", "Codex", "Vibe", "Agy", "Grok", "OpenCode"]);
+  assert.deepEqual(Object.keys(HERDR_KEYS), COLUMNS.map((c) => c.name));
+  assert.deepEqual(GLYPH, { ready: "\u25cf", "sign-in": "\u25d0", install: "\u25cb" });
+  assert.deepEqual(LEGEND, [{ show: "ready", text: "Ready" }, { show: "sign-in", text: "Sign in" },
+                            { show: "install", text: "Install" }]);
+});
+
+test("a cell shows ready, sign in or install, and keeps harnessAction's action", () => {
+  const ready = cellAction(row("ready"), "devbox");
+  assert.equal(ready.show, "ready");
+  assert.equal(ready.action.kind, null);
+  assert.equal(ready.hint, "Codex: Ready");
+  const signedOut = row("installed", { login_argv: HELD("codex login --device-auth") });
+  const signIn = cellAction(signedOut, "devbox");
+  assert.equal(signIn.show, "sign-in");
+  assert.deepEqual(signIn.action, harnessAction(signedOut, "devbox"));
+  assert.equal(signIn.hint, "Codex: Installed, not signed in. Click to sign in.");
+  const missing = row("missing", { install_argv: HELD("curl x | sh"), install_command: "curl x | sh" });
+  const install = cellAction(missing, "devbox");
+  assert.equal(install.show, "install");
+  assert.deepEqual(install.action, harnessAction(missing, "devbox"));
+  assert.equal(install.action.confirm, "Runs curl x | sh on devbox as your SSH user, in a new tab.");
+  assert.equal(install.hint, "Codex: Missing. Click to install.");
+  // this Mac: the CLI asks in its tab
+  assert.equal(cellAction(row("missing", { install_argv: [CLI, "harness", "install", "codex"] }), null).action.confirm, null);
+  // no curl there: an empty cell, the reason as its hint
+  const noCurl = cellAction(row("missing", { install_command: "x" }), "build-1");
+  assert.equal(noCurl.show, null);
+  assert.equal(noCurl.hint, "Codex: Missing, needs curl on build-1");
+  // a state the inventory does not know, or no row at all: empty, never a guessed "Ready"
+  assert.equal(cellAction(row("broken"), "devbox").show, null);
+  assert.equal(cellAction(undefined, "devbox").show, null);
+  assert.equal(cellAction(row("ready", { label: "Co\u001b[2Jdex" }), null).hint, "Co [2Jdex: Ready");
+});
+
+test("matrix row: cells in column order once the inventory is in", () => {
+  const r = matrixRow(DEVBOX, inv(six(["ready", "installed", "missing", "ready", "missing", "installed"]).reverse()), true, ago);
+  assert.deepEqual(r.cells.map((c) => [c.name, c.short, c.show]), [
+    ["claude", "Claude", "ready"], ["codex", "Codex", "sign-in"], ["vibe", "Vibe", "install"],
+    ["agy", "Agy", "ready"], ["grok", "Grok", "install"], ["opencode", "OpenCode", "sign-in"]]);
+  assert.equal(r.status, "checked ago(T)");
+  assert.equal(r.note, "");
+  assert.equal(r.error, "");
+  assert.equal(r.refresh, true);
+  assert.equal(r.loading, false);
+  // a harness the inventory does not list: its column stays, empty
+  const partial = matrixRow(MAC, inv([row("ready", { name: "grok", label: "Grok" })]), true, ago);
+  assert.equal(partial.cells.length, 6);
+  assert.deepEqual(partial.cells.map((c) => c.show), [null, null, null, null, "ready", null]);
+  // refreshing keeps the last answer on screen
+  const again = matrixRow(DEVBOX, inv(six(Array(6).fill("ready")), { loading: true }), true, ago);
+  assert.equal(again.status, "Checking\u2026");
+  assert.equal(again.loading, true);
+  assert.equal(again.cells.length, 6);
+});
+
+test("matrix row: notes replace the cells", () => {
+  // not connected, or a name hc could read as an option: the machine's note, no cells, no Refresh
+  const asleep = matrixRow({ name: "build-1", label: "build-1", connected: false, note: "asleep: inventory once it is connected" },
+                           undefined, false, ago);
+  assert.deepEqual(asleep, { label: "build-1", status: "", note: "asleep: inventory once it is connected", error: "",
+                             refresh: false, loading: false, cells: [] });
+  const odd = matrixRow({ name: "a b", label: "a b", connected: false, note: "name not supported" },
+                        inv(six(Array(6).fill("ready"))), true, ago);
+  assert.equal(odd.note, "name not supported");
+  assert.deepEqual(odd.cells, []);
+  // first check running
+  assert.deepEqual(matrixRow(DEVBOX, { loading: true, error: null }, true, ago),
+                   { label: "devbox", status: "Checking\u2026", note: "", error: "", refresh: true, loading: true, cells: [] });
+  assert.equal(matrixRow(MAC, undefined, true, ago).status, "");
+  // the machine did not answer: one error line, nothing shown as Ready
+  const failed = matrixRow(DEVBOX, { loading: false, data: null, error: "devbox did not answer: timeout" }, true, ago);
+  assert.equal(failed.error, "devbox did not answer: timeout");
+  assert.deepEqual(failed.cells, []);
+  assert.equal(failed.refresh, true);
+  // Herdr has not read the machine's layout yet: no cells, since no tab could open there
+  const connecting = matrixRow(DEVBOX, inv(six(Array(6).fill("missing"))), false, ago);
+  assert.equal(connecting.note, "Herdr is still connecting to devbox");
+  assert.deepEqual(connecting.cells, []);
+  assert.equal(connecting.status, "checked ago(T)");
+});
+
+test("matrix row: no curl there leaves the missing cells empty and says so in the row", () => {
+  const harnesses = [row("ready", { name: "claude", label: "Claude Code" }),
+                     row("installed", { login_argv: HELD("codex login --device-auth") }),
+                     row("missing", { name: "vibe", label: "Vibe", install_command: "curl x | sh" })];
+  const r = matrixRow({ name: "build-1", label: "build-1", connected: true, note: "" }, inv(harnesses), true, ago);
+  assert.deepEqual(r.cells.map((c) => c.show), ["ready", "sign-in", null, null, null, null]);
+  assert.equal(r.status, "needs curl \u00b7 checked ago(T)");
 });
