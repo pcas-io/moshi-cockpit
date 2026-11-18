@@ -10,8 +10,10 @@
 // the add area fit the 640×460 dialog without scrolling. An add's outcome is kept in localStorage (ADDS_KEY) for a
 // dialog Herdr closed while it ran. A machine Herdr warns about says so in its row with the action that fixes it:
 // "Log in" (`hc machine login` in a tab on this Mac) or "Fix" (linger, after an inline question, in a tab there);
-// a warning in the spaces list opens this tab with that machine's row highlighted (props().focus). The logic lives in
-// machines.js (tested with node); `panel` is the MeshAgents dialog, which keeps the state.
+// a warning in the spaces list opens this tab with that machine's row highlighted (props().focus). A remote row's
+// status line also links moshi-cockpit there (`machine cockpit`, asked with the inventory): Install, Update or
+// Connect open a tab on that machine. The logic lives in machines.js and remote.js (tested with node); `panel` is the
+// MeshAgents dialog, which keeps the state.
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
@@ -22,6 +24,7 @@ import { ADDS_KEY, ADD_EXEC, ADD_NOTE, COLUMNS, GLYPH, HOSTKEY_EXEC, IDLE, INVEN
          hostRows, hostkeyArgs, hostsRemoveArgs, inventoryArgs, layoutReady, lingerCommand, lingerQuestion, loginCommand,
          machineRemoveArgs, machineRows, matrixRow, nextStep, recentNames, removeQuestion, tabCommand, takeOutcome, trustArgs,
          typedTarget } from "./machines.js";
+import { COCKPIT_EXEC, cockpitArgs, cockpitLink } from "./remote.js";
 
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
 const hc = () => `${home()}/.local/bin/herdr-core`;
@@ -55,6 +58,25 @@ function inspect(panel, name, refresh, cx) {
     panel.inventory[key] = next;
     cx.notify();
   });
+  if (name !== null) inspectCockpit(panel, name, refresh, cx);
+}
+
+// moshi-cockpit on a remote machine, beside its inventory; a failed check keeps its reason for the link's tooltip.
+function inspectCockpit(panel, name, refresh, cx) {
+  const key = keyOf(name);
+  panel.cockpit[key] = { ...panel.cockpit[key], loading: true, error: null };
+  cx.spawn(async (cx) => {
+    let next;
+    try {
+      const data = await cockpit(exec, home, cockpitArgs(name, refresh), true, COCKPIT_EXEC);
+      next = { loading: false, data: data && typeof data === "object" ? data : null,
+               error: data && typeof data === "object" ? null : "moshi-cockpit gave no state" };
+    } catch (e) {
+      next = { loading: false, data: null, error: plain(e?.message ?? e, 300) };
+    }
+    panel.cockpit[key] = next;
+    cx.notify();
+  });
 }
 
 // Herdr's machines and the hosts to add. A connected machine without an inventory yet is asked, all in parallel;
@@ -70,7 +92,11 @@ function loadList(panel, cx, seed = null) {
       if (seed?.name && Array.isArray(seed.data?.harnesses)) {
         panel.inventory[keyOf(seed.name)] = { loading: false, data: seed.data, error: null };
       }
-      for (const m of panel.machines) if (m.name && m.connected && !panel.inventory[keyOf(m.name)]) inspect(panel, m.name, false, cx);
+      for (const m of panel.machines) {
+        if (!m.name || !m.connected) continue;
+        if (!panel.inventory[keyOf(m.name)]) inspect(panel, m.name, false, cx);
+        else if (!panel.cockpit[keyOf(m.name)]) inspectCockpit(panel, m.name, false, cx);  // a just added one
+      }
     } catch (e) {
       panel.sshHosts = panel.savedHosts = [];  // unknown: no chips rather than stale ones
       panel.machinesProblem = plain(e?.message ?? e, 300);
@@ -83,7 +109,7 @@ function loadList(panel, cx, seed = null) {
 // left by a dialog that closed while it ran, shows once in the flow area.
 export function loadMachines(panel, cx) {
   Object.assign(panel, { machines: machineRows(null), sshHosts: null, savedHosts: null, machinesProblem: null,
-                         inventory: {}, machineAsk: null, removeAsk: null, lingerAsk: null, targetNote: "", rechecked: new Set() });
+                         inventory: {}, cockpit: {}, machineAsk: null, removeAsk: null, lingerAsk: null, targetNote: "", rechecked: new Set() });
   panel.focus = focusName(props());  // the machine a warning in the spaces list opened this tab for
   panel.flow ??= IDLE;
   let shown = null;
@@ -175,6 +201,7 @@ function removeNow(panel, cx) {
     try {
       await cockpit(exec, home, machineRemoveArgs(ask.machine), true, REMOVE_EXEC);
       delete panel.inventory[keyOf(ask.machine)];
+      delete panel.cockpit[keyOf(ask.machine)];
       loadList(panel, cx);
     } catch (e) {
       panel.machinesProblem = plain(e?.message ?? e, 300);  // the list stays as it was
@@ -301,11 +328,29 @@ function cell(panel, t, m, h, c, id) {
     .on_click((_e, cx) => act(panel, m, h, c.action, cx));
 }
 
+// moshi-cockpit there, beside Refresh: its link opens Install, Update or Connect in a tab on that machine once Herdr
+// has its layout; the link of a connected one only says how many agents it has. It gives way before Refresh does.
+function cockpitCell(panel, t, m, ready, id) {
+  const entry = m.connected && m.name ? panel.cockpit?.[keyOf(m.name)] : null;
+  const link = cockpitLink(entry?.data ?? (entry?.error ? { state: "error", state_text: entry.error } : null));
+  if (!link) return null;
+  const action = ready ? link.action : null;
+  return div().id(`${id}-moshi`).min_w_0().truncate().px(3).rounded(3).text_color(action ? t.foreground : t.dim)
+    .when(!!link.tooltip, (e) => e.tooltip(link.tooltip))
+    .when(!!action, (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)).on_click(() => {
+      const next = tabCommand(spaces(), m.name, action.name, action.argv);
+      run(next.command, next.args);
+      closeOverlay(props().overlay);
+    }))
+    .child(link.text);
+}
+
 // A connected machine's warning takes its status line (the whole of it and the status in the tooltip).
-function machineCell(panel, t, m, r, id) {
+function machineCell(panel, t, m, r, ready, id) {
   const refresh = (_e, cx) => (m.connected ? refreshMachine(panel, m.name, cx) : recheck(panel, m.name, cx));
   const warn = m.connected ? r.warning : null;
   const status = warn ? [warn.note, r.status].filter(Boolean).join(" \u00b7 ") : r.status;
+  const moshi = cockpitCell(panel, t, m, ready, id);
   return v_flex().flex_1().min_w_0().h(ROW_H).px(6).gap(4).justify_center()
     .child(div().text_size(12.5).line_height("14px").font_semibold().text_color(m.connected ? t.foreground : t.dim).truncate()
       .child(m.label))
@@ -313,6 +358,7 @@ function machineCell(panel, t, m, r, id) {
       .child(div().id(`${id}-status`).flex_1().min_w_0().text_color(warn ? t.blocked : t.dim).truncate()
         .when(!!status, (e) => e.tooltip(status)).child(warn ? warn.note : r.status))
       .when(!!warn?.action, (e) => e.child(warningLink(panel, t, m, warn?.action, `${id}-warning`)))
+      .when(!!moshi, (e) => e.child(moshi))
       .child(div().id(`${id}-refresh`).flex_none().rounded(3).text_color(r.loading ? t.dim : t.muted)
         .when(!r.loading, (e) => e.cursor_pointer().hover((s) => s.text_color(t.foreground))
           .on_click(refresh))
@@ -348,7 +394,7 @@ function machineRow(panel, t, m, index, cx) {
       : note(t, line, r.error ? t.blocked : t.dim);
   return h_flex().id(id).w_full().h(ROW_H).flex_none().items_center()
     .when(panel.focus != null && panel.focus === m.name, (e) => e.rounded(6).bg(t.selected))
-    .child(machineCell(panel, t, m, r, id))
+    .child(machineCell(panel, t, m, r, ready, id))
     .when(r.cells.length > 0, (el) => el.children(r.cells.map((c) =>
       cell(panel, t, m, harnesses.find((h) => h?.name === c.name), c, `${id}-${c.name}`))))
     .when(r.cells.length === 0, (el) => el.child(div().id(`${id}-note`).w(CELL_W * COLUMNS.length).flex_none().px(6)
