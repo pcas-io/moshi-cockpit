@@ -1,11 +1,14 @@
+// Herdr's spaces mod (Apache-2.0), copied from herdr-app 0.1.16 (installed.json main.js bbcc823778bd7475). Ours adds: filter field, a machine header from one machine on, pinned → groups → rest, and its own right-click menu (menu.js).
+
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
-// grouped by machine when more than one is known. After a space's name, the repo
+// grouped by machine. After a space's name, the repo
 // its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
 // switch, right-click for its menu, drag to reorder.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, ScrollHandle } from "gpui-base";
+import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { GROUPS, PINS, filterRows, prune, sections, validEntries } from "./organize.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -27,6 +30,7 @@ function place(s, ps) {
 }
 const rowHeight = ({ tree }) => (tree ? 28 : 30);
 const RAIL_CELL = 32;
+const GROUP_INDENT = 12;
 // A space's name and its git tail never shrink below this, so a short one ("api")
 // stays readable instead of turning into an ellipsis next to a long branch.
 const SIDE_MIN = 48;
@@ -62,6 +66,8 @@ export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
 
+const stored = (key) => validEntries(key, shared(key)); // pins, groups
+
 export default class Spaces extends View {
   init(_props, cx) {
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
@@ -87,6 +93,9 @@ export default class Spaces extends View {
       for (const state of Object.values(this.reconnecting)) state.busy = false;
     } catch { this.reconnecting = {}; }
     try { this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]")); } catch { this.folded = new Set(); }
+    try { this.groupsFolded = new Set(JSON.parse(localStorage.getItem("groups.folded") ?? "[]")); } catch { this.groupsFolded = new Set(); }
+    this.filter = InputState.new({ placeholder: "Filter spaces" });
+    this.filter.on("change", (_e, cx) => cx.notify());
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -335,10 +344,11 @@ export default class Spaces extends View {
     return out.filter(r => this.shown.has(r.w.id));
   }
 
-  // The rows, under a header per machine once one isn't this computer.
+  // The rows that match the filter, under a header per machine, each machine's in sections.
   grouped(t, collapsed) {
-    const rows = this.ordered();
-    const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
+    const query = collapsed ? "" : this.filter.value().trim(); // the rail has no filter field
+    const rows = filterRows(this.ordered(), query);
+    const draw = (r, member) => (collapsed ? this.compact(r, t) : this.row(r, t, member));
     // Where the active space's row lands among the children this returns: the list scrolls by its direct
     // children, and machine headers, login notes and loading rows count too.
     this.activeAt = -1;
@@ -350,20 +360,16 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    if (!remote.length) {
-      if (loading(null) && !rows.length) return [loadingRow(null)];
-      this.activeAt = rows.findIndex(r => r.w.active);
-      return rows.map(draw);
-    }
     const machineNames = [null, ...remote];
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
+      if (query && !mine.length) return []; // filtering: only machines with a match
       const repair = this.reconnecting[m];
       const machine = this.machines.find(k => k.name === m) ?? repair?.machine;
       const connected = !m || machine?.state === "connected";
       const rebuilt = this.rebuilt(machine) || !!repair;
       const login = machine?.state === "needs_login" ? `hc machine login ${m}` : null;
-      const folded = this.folded.has(m);
+      const folded = !query && this.folded.has(m); // a filter shows every match
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
@@ -371,7 +377,8 @@ export default class Spaces extends View {
         .cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => {
           if (collapsed && login) { run("app.settings", { section: "machines" }); return; }
-          folded ? this.folded.delete(m) : this.folded.add(m);
+          if (query) return; // filtering shows every machine unfolded
+          this.folded.has(m) ? this.folded.delete(m) : this.folded.add(m);
           localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
           cx.notify();
         })
@@ -410,12 +417,48 @@ export default class Spaces extends View {
             .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
-      const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : cell(empty)])];
-      const first = folded ? -1 : mine.findIndex(r => r.w.active);
+      const body = this.sectioned(mine, m, t, collapsed, query, draw);
+      const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? body.items : [loading(m) ? loadingRow(m) : cell(empty)])];
+      const first = folded ? -1 : body.active;
       if (first >= 0) this.activeAt = before + 1 + guidance.length + first;
       before += items.length;
       return items;
     });
+  }
+
+  // One machine's rows: pinned, its groups (a foldable header each, none in the rail), the rest.
+  // `active`: the active space's place among the items, -1 when not drawn.
+  sectioned(rows, m, t, collapsed, query, draw) {
+    const items = [];
+    let active = -1;
+    let grouped = false;
+    for (const s of sections(rows, stored(PINS), stored(GROUPS), m)) {
+      const group = s.kind === "group";
+      const folded = group && !collapsed && !query && this.groupsFolded.has(s.id);
+      if (s.kind === "rest" && grouped) items.push(div().id(`rest-${m ?? "local"}`).h(1).mx(8).my(4).flex_none().bg(t.border));
+      grouped ||= group;
+      if (group && !collapsed) items.push(this.groupHead(s, folded, Boolean(query), t));
+      if (folded) continue;
+      for (const r of s.rows) {
+        if (r.w.active) active = items.length;
+        items.push(draw(r, group));
+      }
+    }
+    return { items, active };
+  }
+
+  // While a filter is on, every group shows unfolded and its header doesn't toggle.
+  groupHead(s, folded, filtering, t) {
+    return h_flex().id(`group-${s.id}`).h(24).flex_none().px(8).gap(7).items_center().text_size(11).text_color(t.dim)
+      .when(!filtering, el => el.cursor_pointer().hover(st => st.bg(t.hover)))
+      .on_click((_e, cx) => {
+        if (filtering) return;
+        this.groupsFolded.has(s.id) ? this.groupsFolded.delete(s.id) : this.groupsFolded.add(s.id);
+        localStorage.setItem("groups.folded", JSON.stringify([...this.groupsFolded]));
+        cx.notify();
+      })
+      .child(div().flex_1().truncate().child(`${s.name} · ${s.rows.length}`))
+      .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none());
   }
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
@@ -441,7 +484,7 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, tree }, t) {
+  row({ w, i, g, tree }, t, member = false) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
@@ -451,6 +494,7 @@ export default class Spaces extends View {
       .relative()
       .id(`space-${w.id}`)
       .px(8)
+      .when(member, (el) => el.pl(8 + GROUP_INDENT)) // a group's member, worktree nesting on top
       .h(rowHeight({ tree }))
       .flex_none()
       .justify_center()
@@ -529,6 +573,11 @@ export default class Spaces extends View {
       changed = true;
     }
     if (changed) setShared("space.colors", kept);
+    const pins = stored(PINS), groups = stored(GROUPS);
+    const ready = new Set(machines().filter(m => m.layout === "ready").map(m => m.name));
+    const live = prune(pins, groups, ids, ready);
+    if (live.pins !== pins) setShared(PINS, live.pins);
+    if (live.groups !== groups) setShared(GROUPS, live.groups);
     const list = this.grouped(t, collapsed);
     // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
     const active = sp.find(p => p.active)?.id;
@@ -543,6 +592,14 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+      .when(!collapsed, el => el.child(div().id("space-filter").px(8).pb(6).flex_none()
+        .on_key_down((e, cx) => {
+          if (e.key !== "escape" || !this.filter.value()) return;
+          this.filter.set_value("");
+          cx.stop_propagation();
+          cx.notify();
+        })
+        .child(Input.new(this.filter).w_full().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
