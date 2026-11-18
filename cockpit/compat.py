@@ -1,14 +1,17 @@
 """The Herdr versions this release was tested with, and what doctor says about the installed ones.
 
-Herdr comes from its vendor (https://herdr.dev) and updates itself. Nothing here downloads, pins or runs it:
-the versions are read from the bundles' Info.plist, and a version that was not tested is a warning, never an
-error.
+Herdr comes from its vendor (https://herdr.dev) and updates itself. Nothing here downloads, pins or updates it.
+On the Mac the versions are read from the bundles' Info.plist; on a headless Linux machine herdr-core is asked
+for its `--version`. A version that was not tested is a warning, never an error.
 """
 
 from __future__ import annotations
 
 import os
 import plistlib
+import re
+import shutil
+import subprocess
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +24,9 @@ TESTED_HERDR_CORE = ("0.1.18", "0.1.21")
 HERDR_URL = "https://herdr.dev"
 UNKNOWN = "unknown"  # the bundle is there, its version cannot be read
 MAX_VERSION = 40
+CORE_TIMEOUT = 5  # seconds for `herdr-core --version`
+NO_CORE = "herdr-core not found on this machine: add it in Herdr on your Mac (Machines)"
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -41,6 +47,13 @@ def check(app_version: Optional[str], core_version: Optional[str]) -> List[Findi
     if core_version:
         findings.append(_judge("herdr-core", "herdr-core", core_version, TESTED_HERDR_CORE))
     return findings
+
+
+def check_core(version: Optional[str]) -> List[Finding]:
+    """herdr-core on a headless machine: Herdr on the Mac installs it there, so a missing one only warns."""
+    if version is None:
+        return [Finding("herdr-core", WARN, NO_CORE)]
+    return [_judge("herdr-core", "herdr-core", version, TESTED_HERDR_CORE)]
 
 
 def _judge(name: str, label: str, version: str, tested: Sequence[str]) -> Finding:
@@ -89,3 +102,19 @@ def bundle_version(bundle: Path) -> Optional[str]:
         return UNKNOWN
     shown = "".join(ch for ch in version if not unicodedata.category(ch).startswith("C")).strip()[:MAX_VERSION]
     return shown or UNKNOWN
+
+
+def headless_core_version(paths: Paths, runner=subprocess.run, which=shutil.which) -> Optional[str]:
+    """herdr-core's version as its `--version` states it: None when there is no binary, UNKNOWN when its answer
+    has no version in it."""
+    binary = next((str(p) for p in (paths.herdr_core_bin, paths.local_bin / "hc") if p.exists()), None)
+    binary = binary or which("herdr-core") or which("hc")
+    if not binary:
+        return None
+    try:
+        done = runner([binary, "--version"], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False,
+                      timeout=CORE_TIMEOUT)
+    except (OSError, ValueError, subprocess.SubprocessError):  # a timeout, an answer that is not UTF-8
+        return UNKNOWN
+    match = _VERSION_RE.search(done.stdout or "")
+    return match.group(0) if match else UNKNOWN

@@ -8,6 +8,9 @@ already here, the same flow renews only the registration token; the installation
 stay. A device key moshi no longer knows (removed in the dashboard) gives a new installation.
 
 Until ocellio has an approval of its own, the person's ocellio token is asked for once, hidden.
+
+On a headless Linux machine (a tab Herdr on the Mac opened there) nothing is opened: connect prints the link and
+the code for a browser on the Mac or phone, and the installation is named after the machine.
 """
 
 from __future__ import annotations
@@ -49,6 +52,9 @@ UNKNOWN = "This Herdr's earlier connection is unknown here; connecting it again.
 ALREADY = "This Herdr is connected to moshi already."
 OCELLIO_PROMPT = "Your ocellio token (input hidden, stays in the Keychain): "
 NO_OCELLIO = "No valid ocellio token entered, nothing stored. Run connect again to add it."
+HEADLESS_OPEN = "Open {link} in a browser on your Mac or phone and enter {code}."
+DONE_HEADLESS = 'Done. In Herdr on your Mac, "+ Agent" can now create agents on this machine.'
+OCELLIO_PROMPT_HEADLESS = "Your ocellio token (input hidden, stays on this machine in {store}): "
 
 
 @dataclass(frozen=True)
@@ -164,11 +170,12 @@ def _ocellio_missing(ctx: AgentContext, config) -> bool:
     return config.has("ocellio") and not ctx.keychain.exists(*OCELLIO_ENTRY)
 
 
-def _ocellio(ctx: AgentContext, io: ConnectIO, config) -> int:
+def _ocellio(ctx: AgentContext, io: ConnectIO, config, headless: bool = False) -> int:
     """Asked once, hidden, and only while missing."""
     if not _ocellio_missing(ctx, config):
         return 0
-    token = io.ask_secret(OCELLIO_PROMPT).strip()
+    prompt = OCELLIO_PROMPT_HEADLESS.format(store=ctx.keychain.name) if headless else OCELLIO_PROMPT
+    token = io.ask_secret(prompt).strip()
     try:
         validate_token(token)
     except KeychainError:
@@ -187,7 +194,7 @@ def _same_origin(link: str, url: str) -> bool:
 
 
 def _connect_moshi(ctx: AgentContext, io: ConnectIO, api: MoshiApi, url: str, opener: Callable[[str], bool],
-                   sleep: Callable[[float], None], label: str) -> int:
+                   sleep: Callable[[float], None], label: str, headless: bool) -> int:
     io.say("Connecting this Herdr to moshi.")
     try:
         start, renewal = _start(ctx, io, api, url, label)
@@ -200,7 +207,9 @@ def _connect_moshi(ctx: AgentContext, io: ConnectIO, api: MoshiApi, url: str, op
             raise
         return 1
     link, code = clean(start.verification_uri), clean(start.user_code)
-    if _same_origin(start.verification_uri_complete, url):
+    if headless:  # no browser here: the person approves on the Mac or phone
+        io.say(HEADLESS_OPEN.format(link=link, code=code))
+    elif _same_origin(start.verification_uri_complete, url):
         io.say(f"Confirm in your browser. If it opens on another device, go to {link} and enter {code}.")
         opener(start.verification_uri_complete)
     else:  # a page of another server is never opened unasked
@@ -215,9 +224,10 @@ def _connect_moshi(ctx: AgentContext, io: ConnectIO, api: MoshiApi, url: str, op
 
 
 def run(ctx: AgentContext, io: ConnectIO, api: MoshiApi, opener: Callable[[str], bool] = open_browser,
-        sleep: Callable[[float], None] = time.sleep, label: Optional[str] = None) -> int:
+        sleep: Callable[[float], None] = time.sleep, label: Optional[str] = None, headless: bool = False) -> int:
     """0 once this Herdr is connected; 1 with one sentence when the attempt ended. `label` defaults to the
-    host name. Errors that are not part of the flow (keychain, config, moshi's refusals) are raised.
+    host name: "Herdr on {label}" on the Mac, the bare name on a headless machine, where `opener` is never
+    called. Errors that are not part of the flow (keychain, config, moshi's refusals) are raised.
     With a valid approval and only the ocellio token missing, there is no browser step."""
     config = load_config(ctx.paths)
     url = require(config, "moshi")
@@ -225,9 +235,11 @@ def run(ctx: AgentContext, io: ConnectIO, api: MoshiApi, opener: Callable[[str],
     if (_ocellio_missing(ctx, config) and ctx.keychain.exists(*DEVICE_ENTRY)
             and bound_origin(ctx.paths, DEVICE) is not None and approval_valid(ctx.paths, ctx.keychain)):
         io.say(ALREADY)
-    elif _connect_moshi(ctx, io, api, url, opener, sleep, f"Herdr on {label or socket.gethostname()}"):
+    else:
+        name = label or socket.gethostname()
+        if _connect_moshi(ctx, io, api, url, opener, sleep, name if headless else f"Herdr on {name}", headless):
+            return 1
+    if _ocellio(ctx, io, config, headless):
         return 1
-    if _ocellio(ctx, io, config):
-        return 1
-    io.say(DONE)
+    io.say(DONE_HEADLESS if headless else DONE)
     return 0

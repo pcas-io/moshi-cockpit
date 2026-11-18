@@ -1,8 +1,11 @@
 """`moshi-cockpit connect`: one browser approval against FakeMoshi. Fake keychain, no real browser, no waiting."""
 
 import dataclasses
+import io
 import json
+import os
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
@@ -291,6 +294,45 @@ class ConnectTest(unittest.TestCase):
             connect.run(self.ctx, io, self.api, opener=self.browser, sleep=self.slept.append)
         self.assertEqual(self.moshi.calls("POST", "/api/device/authorize")[0]["body"], {"label": "Herdr on studio"})
 
+    def run_headless(self, label="devbox", decision=None):
+        """A Linux machine: nothing is opened, the person approves elsewhere while connect waits."""
+        decide = decision or self.moshi.approve
+
+        def sleep(seconds):
+            self.slept.append(seconds)
+            decide(next(iter(self.moshi.flows.values()))["user_code"])
+        io = connect.ConnectIO(ask_secret=self.ask, say=self.said.append)
+        return connect.run(self.ctx, io, self.api, opener=self.opened.append, sleep=sleep, label=label, headless=True)
+
+    def test_headless_prints_link_and_code_and_never_opens(self):
+        self.assertEqual(self.run_headless(), 0)
+        self.assertEqual(self.opened, [])
+        code = next(iter(self.moshi.flows.values()))["user_code"]
+        self.assertIn(connect.HEADLESS_OPEN.format(link=f"{origin(MOSHI)}/link", code=f"{code[:4]}-{code[4:]}"),
+                      self.said)
+        self.assertEqual(self.moshi.calls("POST", "/api/device/authorize")[0]["body"], {"label": "devbox"})
+        self.assertEqual(self.said[-1], connect.DONE_HEADLESS)
+        self.assertIsNotNone(self.entry(REGISTER_ENTRY))
+
+    def test_headless_label_defaults_to_the_host_name(self):
+        with mock.patch.object(connect.socket, "gethostname", return_value="build-1"):
+            self.assertEqual(self.run_headless(label=None), 0)
+        self.assertEqual(self.moshi.calls("POST", "/api/device/authorize")[0]["body"], {"label": "build-1"})
+
+    def test_headless_denied_and_expired_keep_their_exit_codes(self):
+        for decision, sentence in ((self.moshi.deny, connect.DENIED), (self.moshi.expire, connect.EXPIRED)):
+            with self.subTest(sentence=sentence):
+                self.said.clear()
+                self.assertEqual(self.run_headless(decision=decision), 1)
+                self.assertEqual(self.said[-1], sentence)
+                self.assertEqual(self.opened, [])
+        self.assertEqual(self.fake.entries, {})
+
+    def test_headless_ocellio_prompt_names_the_store(self):
+        self.assertEqual(self.run_headless(), 0)
+        self.assertEqual(self.prompts, [connect.OCELLIO_PROMPT_HEADLESS.format(store=self.ctx.keychain.name)])
+        self.assertEqual(self.entry(OCELLIO_ENTRY), OCELLIO_TOKEN)
+
     def test_text_from_moshi_reaches_the_terminal_without_control_characters(self):
         self.run_connect()
         installation = next(iter(self.moshi.installations.values()))
@@ -438,8 +480,27 @@ class CommandLineTest(unittest.TestCase):
         with mock.patch.object(cli.connect, "run", run), mock.patch.object(cli, "_context", return_value=self.ctx), \
                 mock.patch("builtins.print") as printed, mock.patch("sys.stdin.isatty", return_value=tty), \
                 mock.patch("builtins.input") as held:
-            code = cli.cmd_connect(mock.Mock(), self.ctx.paths)
+            code = cli.cmd_connect(mock.Mock(label=None), self.ctx.paths)
         return code, " ".join(str(c.args[0]) for c in printed.call_args_list), held, run
+
+    def test_connect_label_must_be_a_machine_name(self):
+        run, api = mock.Mock(return_value=0), mock.Mock()
+        with mock.patch.dict(os.environ, {"HOME": str(self.ctx.paths.home)}), \
+                mock.patch.object(cli.connect, "run", run), mock.patch.object(cli, "MoshiApi", api), \
+                mock.patch.object(cli, "default_store", side_effect=AssertionError("no store")), \
+                mock.patch("sys.stdin.isatty", return_value=False), redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.main(["connect", "--label", "a b"]), 1)
+        self.assertIn("Not a machine name", err.getvalue())
+        run.assert_not_called()
+        api.assert_not_called()
+
+    def test_the_label_and_the_headless_flag_reach_connect(self):
+        paths = dataclasses.replace(self.ctx.paths, headless=True)
+        run = mock.Mock(return_value=0)
+        with mock.patch.object(cli.connect, "run", run), mock.patch.object(cli, "_context", return_value=self.ctx), \
+                mock.patch("builtins.print"), mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.cmd_connect(mock.Mock(label="build-1"), paths), 0)
+        self.assertEqual((run.call_args.kwargs["label"], run.call_args.kwargs["headless"]), ("build-1", True))
 
     def test_it_talks_to_the_configured_moshi(self):
         code, _, _, run = self.run_connect()

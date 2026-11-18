@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, removal, sessions, status, targets, wizard
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -21,6 +21,7 @@ from cockpit.paths import Paths
 from cockpit.registry import load_agents
 from cockpit.secrets import KeychainError, default_store
 from cockpit.text import clean
+from cockpit.tokens import DEVICE, bound_origin
 
 APPROVAL_EXIT = 3  # shared with the mods: the panel opens the connect dialog
 ACTIVE_ELSEWHERE_EXIT = 4  # shared with the mods: stdout {"active": label}, the panel offers a takeover
@@ -51,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     stat = sub.add_parser("status", help="moshi mesh overview (read with this Herdr's device key)")
     stat.add_argument("--json", action="store_true", help="compact JSON (for the sidebar in Herdr)")
 
-    sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
+    con = sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
+    con.add_argument("--label", help="the installation's name in moshi (default: this machine's host name)")
     sub.add_parser("migrate", help="move the agents of an earlier setup to this installation (after connect)")
 
     agt = sub.add_parser("agent", help="manage agents (name, harness, role)")
@@ -260,8 +262,10 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
     (not after stdin closed: nobody can press it)."""
     code, wait = 1, True
     try:
+        label = _machine_name(args.label)
         ctx = _context(paths)
-        code = connect.run(ctx, connect.ConnectIO(), MoshiApi(require(load_config(paths), "moshi")))
+        code = connect.run(ctx, connect.ConnectIO(), MoshiApi(require(load_config(paths), "moshi")), label=label,
+                           headless=paths.headless)
     except (KeychainError, MoshiError, ValueError, OSError) as exc:  # OSError: network, browser
         print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
     except KeyboardInterrupt:
@@ -273,6 +277,12 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
     if wait and sys.stdin.isatty():
         _hold_tab()
     return code
+
+
+def _machine_name(label: Optional[str]) -> Optional[str]:
+    if label is not None and not targets.NAME_RE.fullmatch(label):
+        raise ValueError(f"Not a machine name: {clean(label, '?', limit=64)}")
+    return label
 
 
 def cmd_migrate(args: argparse.Namespace, paths: Paths) -> int:
@@ -352,9 +362,12 @@ def _agent_list(ctx: AgentContext, args: argparse.Namespace) -> int:
     found = load_agents(paths, enforce=False)
     if args.json:
         config = load_config(paths)
+        connected = (config.has("moshi") and ctx.keychain.exists(*connect.DEVICE_ENTRY)
+                     and bound_origin(paths, DEVICE) is not None)
         print(json.dumps({"agents": status.local_agents(paths, config, ctx.keychain),
                           "harnesses": wizard.harness_offer(paths),
-                          "servers": {name: config.has(name) for name in SERVERS}}, ensure_ascii=False))
+                          "servers": {name: config.has(name) for name in SERVERS},
+                          "version": __version__, "connected": connected}, ensure_ascii=False))
         return 0
     for a in found:
         print(f"{a.name:<20}{a.harness:<10}{a.role}")
