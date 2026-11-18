@@ -195,7 +195,6 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
     if old_key:
         notes.append(old_key)
     notes.append(defaults.ensure_claude_launcher(ctx.paths, ctx.backup))
-    defaults.install_icons(ctx.paths, ctx.backup)
     notes.append(defaults.ensure_vibe_entry(ctx.paths, ctx.backup))
     notes.append(defaults.sync_agent_menu(ctx.paths, ctx.backup))
     if ready:  # otherwise the last note says what to do, once

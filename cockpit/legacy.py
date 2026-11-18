@@ -280,7 +280,7 @@ def _adopt(ctx: AgentContext, api: MoshiApi, registration: str, agent: Agent, ur
         if exc.status == 401:
             raise ApprovalRequired(APPROVAL) from None
         if exc.reason == "already_adopted":
-            return f"{agent.name}: already moved", True
+            return f"{agent.name}: already on this installation", True
         if exc.reason in REFUSED:
             return f"{agent.name}: not moved, {REFUSED[exc.reason]}", False
         raise refusal(exc, agent.name) from None

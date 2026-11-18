@@ -302,6 +302,7 @@ class UninstallTest(unittest.TestCase):
         self.assertIn("Kept: your settings in ~/.config/moshi-cockpit/ (config.json, agents.json, rules.md)", text)
         self.assertIn("Keychain", text)
         self.assertIn("rm -rf ~/.config/moshi-cockpit", text)
+        self.assertIn("Earlier copies of your settings (*.bak-…) stay in ~/.config/moshi-cockpit/", text)
 
 
 if __name__ == "__main__":

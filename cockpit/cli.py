@@ -178,7 +178,8 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
         return "~/" + str(path.relative_to(paths.home)) if paths.home in path.parents else str(path)
 
     print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), the Keychain entries "
-          f"(moshi-… and ocellio-…), the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself.")
+          f"(moshi-… and ocellio-…), the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself. "
+          f"Earlier copies of your settings (*.bak-…) stay in {short(settings)}/ too.")
     print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, delete the moshi-… "
           "and ocellio-… entries in Keychain Access, and revoke this installation in the moshi dashboard.")
     return 0
@@ -288,7 +289,7 @@ def _agent_catalog(ctx: AgentContext, args: argparse.Namespace) -> int:
 def _agent_where(ctx: AgentContext, args: argparse.Namespace) -> int:
     holder = status.where(ctx.paths, load_config(ctx.paths), ctx.keychain, registry.validate_name(args.name))
     if args.json:
-        print(json.dumps(holder, ensure_ascii=False))
+        print(json.dumps({"active": holder["active"], "here": holder["here"]}, ensure_ascii=False))
     elif holder["here"]:
         print(f"{args.name} is active on this Herdr ({holder['active']})")
     else:

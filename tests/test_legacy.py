@@ -268,11 +268,11 @@ class MigrateTest(ConnectedHerdr, unittest.TestCase):
         self.assertEqual(notes[-1], legacy.REVOKE_HINT)
         self.assert_no_secret("\n".join(notes))
 
-    def test_migrate_again_reports_already_moved(self):
+    def test_migrate_again_reports_already_on_this_installation(self):
         legacy.migrate(self.ctx, self.api)
         code, out, err = self.cli("migrate")
         self.assertEqual(code, 0, err)
-        self.assertIn("scout: already moved", out)
+        self.assertIn("scout: already on this installation", out)
         self.assertIn(legacy.REVOKE_HINT, out)
         self.assert_no_secret(out, err)
 
