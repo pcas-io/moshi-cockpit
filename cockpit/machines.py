@@ -10,27 +10,32 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
+import signal
 import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from cockpit import hosts
+from cockpit.backup import BackupStore
 from cockpit.harness_install import INSTALL, shown_command
 from cockpit.inventory import (BINARIES, INSTALLED, KNOWN, LABELS, LOGIN, MARK, MISSING, PATH_EXTRA, STATE_TEXT,
                                held_argv, parse_probe, probe_script)
 from cockpit.paths import Paths
 from cockpit.ssh_config import read_hosts
+from cockpit.targets import check_target
 from cockpit.text import clean
 
 Runner = Callable[[Sequence[str], int], Tuple[int, str, str]]
 
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:-]{0,253}$")
 LIST_TIMEOUT = 15
 PROBE_TIMEOUT = 45  # the runner's guard; hc's own --timeout for the remote program is shorter
 REMOTE_TIMEOUT = "30"
 CACHE_SECONDS = 60
+ADD_TIMEOUT = 120  # `machine add --batch`: hc dials, copies itself there and checks that it answers
+# add_batch's worst case: ls, add, ls, probe (the mod's exec waits longer: ADD_EXEC in machines.js, tested)
+ADD_WORST = LIST_TIMEOUT + ADD_TIMEOUT + LIST_TIMEOUT + PROBE_TIMEOUT
 CACHE_FILE = "inventory.json"
 LOCK_FILE = "inventory.lock"
 THIS_MAC = "This Mac"
@@ -50,11 +55,27 @@ def run_capture(argv: Sequence[str], timeout: int) -> Tuple[int, str, str]:
     return done.returncode, done.stdout, done.stderr
 
 
-def check_target(text: str) -> str:
-    """The text unchanged when hc can only read it as a name, else ValueError."""
-    if not isinstance(text, str) or not NAME_RE.fullmatch(text):
-        raise ValueError(f"'{text}' cannot be passed on to hc")
-    return text
+def run_batch(argv: Sequence[str], timeout: int) -> Tuple[int, str, str]:
+    """Like run_capture, in a session of its own: without a terminal to ask on, nothing ssh starts can prompt. On
+    a timeout the whole process group goes (hc and the ssh and scp it started), not only hc."""
+    try:
+        proc = subprocess.Popen(list(argv), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, errors="replace", start_new_session=True)
+    except OSError as exc:
+        return 127, "", exc.strerror or str(exc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass  # already gone
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # a child that left the group still holds the pipes; hc itself is dead
+        return 124, "", f"no answer within {timeout} s"
+    return proc.returncode, out, err
 
 
 def _first_line(text: str) -> str:
@@ -99,6 +120,12 @@ def list_machines(paths: Paths, runner: Runner) -> Dict:
     except ValueError as exc:
         result["problem"] = str(exc)
     result["ssh_hosts"] = [alias for alias in read_hosts(paths.home) if alias not in known]
+    try:
+        saved = hosts.load_hosts(paths)
+    except ValueError as exc:
+        saved = []
+        result["problem"] = "; ".join(filter(None, [result.get("problem"), str(exc)]))
+    result["saved_hosts"] = [t for t in saved if t not in known and t not in result["ssh_hosts"]]
     return result
 
 
@@ -224,3 +251,77 @@ def add_machine(paths: Paths, alias: str, call: Callable[[Sequence[str]], int], 
     for row in rows:
         say(f"{row['label']:<14}{row['state_text']}")
     return code
+
+
+# hc's error kinds that mean a login it can't do without a person; ssh's words for a password and for keys only.
+_LOGIN_KINDS = ("needs_login", "login_needed", "auth_failed")
+_PASSWORD_WORDS = ("password", "keyboard-interactive")
+_HOST_KEY_WORDS = ("host key verification failed", "host identification has changed", "host key is known for")
+
+
+def _hc_error(*texts: str) -> Dict:
+    """`{"kind", "message"}` of hc's JSON error, from whichever output carries it; {} when none does."""
+    for text in texts:
+        for chunk in [text] + (text or "").splitlines():
+            try:
+                found = json.loads(chunk)
+            except ValueError:
+                continue
+            error = found.get("error") if isinstance(found, dict) else None
+            if isinstance(error, dict):
+                return error
+    return {}
+
+
+def _new_name(out: str) -> Optional[str]:
+    try:
+        found = json.loads(out)
+    except ValueError:
+        return None
+    if isinstance(found, dict) and isinstance(found.get("machine"), dict):
+        found = found["machine"]
+    name = found.get("name") if isinstance(found, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
+def add_batch(paths: Paths, store: BackupStore, target: str, runner: Runner, batch: Optional[Runner] = None) -> Dict:
+    """`hc machine add --install` without a terminal (the Machines tab's add): saves `target` to the own list
+    unless it is a Host of ~/.ssh/config, then answers {ok, machine, inventory} or {ok: false, needs?, message}.
+    hc cannot ask anything here: a password or an unknown host key comes back as `needs`."""
+    check_target(target)
+    saved = True
+    if target not in read_hosts(paths.home):
+        try:
+            hosts.add_host(paths, store, target)
+        except (ValueError, OSError):  # a broken or unsafe hosts.json never blocks the add
+            saved = False
+    note = {} if saved else {"saved": False}
+    try:
+        before: Optional[Set[str]] = {str(m.get("name")) for m in _herdr_machines(paths, runner)}
+    except ValueError:
+        before = None
+    code, out, err = (batch or runner)([_hc(paths), "machine", "add", "--install", "--json", "--", target], ADD_TIMEOUT)
+    if code != 0:
+        error = _hc_error(out, err)
+        message = clean(str(error.get("message") or ""), "", limit=300) or _first_line(err) or _first_line(out) \
+            or f"hc machine add ended with exit code {code}"
+        said = f"{message}\n{err}\n{out}".lower()
+        if any(word in said for word in _PASSWORD_WORDS):
+            return dict(note, ok=False, needs="password", message=message)
+        if "permission denied" in said:
+            return dict(note, ok=False, needs="key", message=f"{target} accepts only ssh keys and none of yours worked.")
+        if error.get("kind") == "host_key" or any(word in said for word in _HOST_KEY_WORDS):
+            return dict(note, ok=False, needs="host_key", message=message)
+        if error.get("kind") in _LOGIN_KINDS:
+            return dict(note, ok=False, needs="tab", message=message)
+        return dict(note, ok=False, message=message)
+    answer: Dict = dict(note, ok=True, machine=None, inventory=None)
+    try:
+        name = _new_name(out) or _added_name(target, before, _herdr_machines(paths, runner))
+        if name is None:
+            return dict(answer, message=f"{target} was added; Herdr does not list it yet.")
+        answer["machine"] = name
+        answer["inventory"] = inventory(paths, name, runner, refresh=True)
+    except (ValueError, OSError) as exc:
+        answer["message"] = f"{target} was added; {clean(str(exc), '?', limit=300)}"
+    return answer

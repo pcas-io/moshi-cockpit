@@ -1,16 +1,20 @@
 // "+ Agent" → Machines: a matrix of this Mac and Herdr's machines (rows) by the six harnesses (columns,
-// `machine inventory`), and the ssh hosts not added yet as chips (`machine add` in a visible tab). Opening the tab
-// asks once; "Refresh" asks one machine again; nothing polls. A Sign in or Install cell opens a tab where the
-// command runs (on that machine for a remote one). Fixed row height and column widths, so This Mac, six machines
-// and the hosts fit the 640×460 dialog without scrolling. The logic lives in machines.js (tested with node);
-// `panel` is the MeshAgents dialog, which keeps the state.
+// `machine inventory`), then the add area: the ssh hosts not added yet and the saved hosts as chips, and a field for
+// a typed target. A chip or the field starts the add flow inline (host key check, Trust with the fingerprint,
+// `machine add --batch`, which installs herdr-core there); a password, keys only or ssh settings the dialog doesn't
+// handle get "In a tab" (`machine add` attached).
+// Opening the tab asks once; "Refresh" asks one machine again; nothing polls. A Sign in or Install cell opens a
+// tab where the command runs (on that machine for a remote one). Fixed row height and column widths, so This Mac,
+// a few machines and the add area fit the 640×460 dialog without scrolling. The logic lives in machines.js (tested
+// with node); `panel` is the MeshAgents dialog, which keeps the state.
 
 import { div } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, home, run, props, closeOverlay, spaces, machines } from "herdr";
 import { ago, btn, cockpit, plain } from "./util.js";
-import { COLUMNS, GLYPH, INVENTORY_EXEC, LEGEND, addHostCommand, cellAction, hostRows, inventoryArgs, layoutReady, machineRows,
-         matrixRow, tabCommand } from "./machines.js";
+import { ADD_EXEC, ADD_NOTE, COLUMNS, GLYPH, HOSTKEY_EXEC, IDLE, INVENTORY_EXEC, LEGEND, TRUST_EXEC, addBatchArgs, addHostCommand,
+         busy, cellAction, flowView, hostRows, hostkeyArgs, hostsRemoveArgs, inventoryArgs, layoutReady, machineRows, matrixRow,
+         nextStep, tabCommand, trustArgs, typedTarget } from "./machines.js";
 
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
 const keyOf = (name) => name ?? "";
@@ -34,24 +38,39 @@ function inspect(panel, name, refresh, cx) {
   });
 }
 
-// This Mac is asked at once; Herdr's machines as soon as the list says which are connected, all in parallel.
-export function loadMachines(panel, cx) {
-  Object.assign(panel, { machines: machineRows(null), sshHosts: null, machinesProblem: null, inventory: {},
-                         machineAsk: null });
-  inspect(panel, null, false, cx);
+// Herdr's machines and the hosts to add. A connected machine without an inventory yet is asked, all in parallel;
+// `seed` is the inventory a just added machine came with (`machine add --batch`), so it is not asked again.
+function loadList(panel, cx, seed = null) {
   cx.spawn(async (cx) => {
     try {
       const list = await cockpit(exec, home, ["machine", "list", "--json"]);
       panel.machines = machineRows(list);
       panel.sshHosts = hostRows(list?.ssh_hosts);
+      panel.savedHosts = hostRows(list?.saved_hosts);
       panel.machinesProblem = list?.problem ? plain(list.problem, 300) : null;
-      for (const m of panel.machines) if (m.name && m.connected) inspect(panel, m.name, false, cx);
+      if (seed?.name && Array.isArray(seed.data?.harnesses)) {
+        panel.inventory[keyOf(seed.name)] = { loading: false, data: seed.data, error: null };
+      }
+      for (const m of panel.machines) if (m.name && m.connected && !panel.inventory[keyOf(m.name)]) inspect(panel, m.name, false, cx);
     } catch (e) {
-      panel.sshHosts = false;  // unknown: no section rather than "No new hosts"
+      panel.sshHosts = panel.savedHosts = [];  // unknown: no chips rather than stale ones
       panel.machinesProblem = plain(e?.message ?? e, 300);
     }
     cx.notify();
   });
+}
+
+// This Mac is asked at once; Herdr's machines as soon as the list says which are connected.
+export function loadMachines(panel, cx) {
+  Object.assign(panel, { machines: machineRows(null), sshHosts: null, savedHosts: null, machinesProblem: null,
+                         inventory: {}, machineAsk: null, targetNote: "" });
+  panel.flow ??= IDLE;
+  if (!panel.machineTarget) {  // retained text state: created once, here (init or a click), never in render
+    panel.machineTarget = InputState.new({ placeholder: "user@host, user@host:port or an ssh alias" });
+    panel.machineTarget.on("submit", (_e, cx) => addTyped(panel, cx));
+  }
+  inspect(panel, null, false, cx);
+  loadList(panel, cx);
 }
 
 export function refreshMachine(panel, name, cx) {
@@ -74,10 +93,75 @@ function act(panel, m, h, action, cx) {
   cx.notify();
 }
 
-function addHost(alias) {
+// The fallback: `machine add` attached in a tab on this Mac, where hc and ssh ask what they need.
+function addInTab(alias) {
   const next = addHostCommand(spaces(), cli(), alias);
   run(next.command, next.args);
   closeOverlay(props().overlay);
+}
+
+// One step of the add flow (machines.js nextStep); entering "adding" runs `machine add --batch`, and its success
+// clears the field and reloads the list with the new machine's inventory from the answer.
+function advance(panel, answer, cx) {
+  const before = panel.flow;
+  panel.flow = nextStep(before, answer);
+  cx.notify();
+  if (panel.flow === before) return;
+  if (panel.flow.step === "adding") addNow(panel, panel.flow.target, cx);
+  if (answer.event === "added" && answer.data?.ok === true) {
+    panel.machineTarget?.set_value("");
+    panel.targetNote = "";
+    loadList(panel, cx, { name: answer.data.machine, data: answer.data.inventory });
+  }
+}
+
+function ask(panel, target, event, call, cx) {
+  cx.spawn(async (cx) => {
+    let answer;
+    try {
+      answer = { event, target, data: await call() };
+    } catch (e) {
+      answer = { event: "error", target, message: plain(e?.message ?? e, 300) };
+    }
+    advance(panel, answer, cx);
+  });
+}
+
+function startFlow(panel, target, cx) {
+  if (busy(panel.flow)) return;
+  advance(panel, { event: "start", target }, cx);
+  ask(panel, target, "hostkey", () => cockpit(exec, home, hostkeyArgs(target), true, HOSTKEY_EXEC), cx);
+}
+
+function trustNow(panel, cx) {
+  if (panel.flow?.step !== "trust") return;  // a second click while it runs
+  const { target, key } = panel.flow;
+  advance(panel, { event: "trust", target }, cx);
+  ask(panel, target, "trusted", () => cockpit(exec, home, trustArgs(target, key), true, TRUST_EXEC), cx);
+}
+
+function addNow(panel, target, cx) {
+  ask(panel, target, "added", () => cockpit(exec, home, addBatchArgs(target), true, ADD_EXEC), cx);
+}
+
+function removeSaved(panel, alias, cx) {
+  cx.spawn(async (cx) => {
+    try {
+      await cockpit(exec, home, hostsRemoveArgs(alias));
+      panel.savedHosts = (panel.savedHosts ?? []).filter((h) => h.alias !== alias);
+    } catch (e) {
+      panel.machinesProblem = plain(e?.message ?? e, 300);
+    }
+    cx.notify();
+  });
+}
+
+// "Add a machine": what passes starts the flow like a chip; anything else shows the note and runs nothing.
+function addTyped(panel, cx) {
+  const target = typedTarget(panel.machineTarget.value());
+  panel.targetNote = target.note;
+  if (target.ok) return startFlow(panel, target.value, cx);
+  cx.notify();
 }
 
 const glyphColor = (t, show) => (show === "ready" ? t.ansi2 ?? t.done : show === "sign-in" ? t.foreground : t.muted);
@@ -151,27 +235,60 @@ function askRow(panel, t) {
     .child(btn("machine-ask-no", t, "Cancel", (_e, cx) => { panel.machineAsk = null; cx.notify(); }));
 }
 
-function hostChip(t, h, i) {
-  const el = div().id(`ssh-host-${i}`).h(20).max_w(200).px(7).flex().items_center().rounded(5).border_1().border_color(t.border)
-    .text_size(11.5).text_color(h.ok ? t.foreground : t.dim).truncate();
-  if (!h.ok) return el.border_color(t.dim).tooltip(`${h.label}: ${h.note}`).child(`${h.label} \u00b7 ${h.note}`);
-  return el.cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(`Add ${h.label}`).on_click(() => addHost(h.alias))
-    .child(`+ ${h.label}`);
+// A host chip starts the add flow (not while a step runs); a saved one has a × that drops it from the list.
+function hostChip(panel, t, h, id, removable) {
+  const el = h_flex().id(id).h(20).max_w(200).px(7).gap(6).items_center().rounded(5).border_1().border_color(t.border)
+    .text_size(11.5).text_color(h.ok ? t.foreground : t.dim);
+  if (!h.ok) return el.border_color(t.dim).tooltip(`${h.label}: ${h.note}`).child(div().truncate().child(`${h.label} \u00b7 ${h.note}`));
+  const idle = !busy(panel.flow);
+  return el.child(div().id(`${id}-add`).min_w_0().truncate().tooltip(`Add ${h.label}`)
+      .when(idle, (e) => e.cursor_pointer().hover((s) => s.text_color(t.accent)).on_click((_e, cx) => startFlow(panel, h.alias, cx)))
+      .child(`+ ${h.label}`))
+    .when(removable, (e) => e.child(div().id(`${id}-remove`).flex_none().text_color(t.dim).cursor_pointer().tooltip(`Forget ${h.label}`)
+      .hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => removeSaved(panel, h.alias, cx)).child("\u00d7")));
 }
 
-function hostsSection(panel, t) {
-  const hosts = panel.sshHosts;
+// One wrapping row per list, its label first; no row for an empty list.
+function chipRow(panel, t, label, hosts, prefix, removable) {
   const list = Array.isArray(hosts) ? hosts : [];
-  return v_flex().w_full().gap(4).px(6).flex_none()
-    .child(div().h(14).text_size(10.5).text_color(t.dim).child("From ~/.ssh/config"))
-    .when(hosts === null, (el) => el.child(note(t, "Checking…")))
-    .when(Array.isArray(hosts) && hosts.length === 0, (el) => el.child(note(t, "No new hosts in ~/.ssh/config.")))
-    .when(list.length > 0, (el) => el.child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(4)
-      .children(list.map((h, i) => hostChip(t, h, i)))));
+  if (list.length === 0) return null;
+  return h_flex().w_full().flex_wrap().gap_x(6).gap_y(4).px(6).items_center().flex_none()
+    .child(div().h(20).flex().items_center().text_size(10.5).text_color(t.dim).child(label))
+    .children(list.map((h, i) => hostChip(panel, t, h, `${prefix}-${i}`, removable)));
+}
+
+// One 28 px row under the chips (there even when the list failed): a target typed here starts the flow (Enter or Add).
+function addRow(panel, t) {
+  return h_flex().w_full().h(28).gap(6).px(6).items_center().flex_none()
+    .child(div().flex_none().text_size(11.5).text_color(t.dim).child("Add a machine"))
+    .child(Input.new(panel.machineTarget).flex_1().min_w_0().h(26).px(8).rounded(6).border_1().border_color(t.input)
+      .bg(t.background).text_size(11.5))
+    .child(btn("machine-add", t, "Add", (_e, cx) => addTyped(panel, cx), { enabled: !busy(panel.flow) }))
+    .when(!!panel.targetNote, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(panel.targetNote)));
+}
+
+// The add flow's one area under the field: what runs, the Trust question or what went wrong.
+function flowArea(panel, t) {
+  const view = flowView(panel.flow);
+  if (!view) return null;
+  const color = view.tone === "blocked" ? t.blocked : view.tone === "foreground" ? t.foreground : t.dim;
+  const cancel = (_e, cx) => advance(panel, { event: "cancel" }, cx);
+  const buttons = {
+    trust: () => btn("machine-trust", t, "Trust", (_e, cx) => trustNow(panel, cx), { primary: true }),
+    cancel: () => btn("machine-trust-no", t, "Cancel", cancel),
+    tab: () => btn("machine-add-tab", t, "In a tab", () => addInTab(panel.flow.target)),
+  };
+  return h_flex().w_full().gap(8).px(8).py(4).rounded(6).items_center().flex_none()
+    .when(view.buttons.length > 0, (e) => e.bg(t.raised))
+    .child(div().flex_1().min_w_0().text_size(11.5).text_color(color).child(view.text))
+    .children(view.buttons.map((b) => buttons[b]()));
 }
 
 export function machinesTab(panel, t) {
   const ask = askRow(panel, t);
+  const ssh = chipRow(panel, t, "From ~/.ssh/config", panel.sshHosts, "ssh-host", false);
+  const saved = chipRow(panel, t, "Saved", panel.savedHosts, "saved-host", true);
+  const flow = flowArea(panel, t);
   // line_height: one fixed text height for the whole tab, so its rows add up the same on every theme.
   return v_flex().w_full().flex_1().min_h(0).gap(6).line_height(1.2).overflow_y_scrollbar()
     .when(!!panel.machinesProblem, (el) => el.child(div().px(6).flex_none().child(note(t, panel.machinesProblem, t.blocked))))
@@ -180,5 +297,10 @@ export function machinesTab(panel, t) {
       .child(headerRow(t))
       .children((panel.machines ?? []).map((m, i) => machineRow(panel, t, m, i))))
     .when(!!ask, (el) => el.child(ask))
-    .when(panel.sshHosts !== false, (el) => el.child(hostsSection(panel, t)));
+    .child(div().id("machines-add-note").px(6).flex_none().text_size(10.5).text_color(t.dim).truncate().tooltip(ADD_NOTE)
+      .child(ADD_NOTE))
+    .when(!!ssh, (el) => el.child(ssh))
+    .when(!!saved, (el) => el.child(saved))
+    .child(addRow(panel, t))
+    .when(!!flow, (el) => el.child(flow));
 }

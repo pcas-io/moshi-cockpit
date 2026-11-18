@@ -19,7 +19,7 @@ export function inventoryArgs(machine, refresh) {
   return ["machine", "inventory", ...(machine ? ["--on", machine] : []), ...(refresh ? ["--refresh"] : []), "--json"];
 }
 
-// The name rule of cockpit/machines.py (NAME_RE): what hc can only read as a name, never as an option.
+// The name rule of cockpit/targets.py (NAME_RE): what hc can only read as a name, never as an option.
 export const passable = (text) => typeof text === "string" && /^[A-Za-z0-9][A-Za-z0-9._@:-]{0,253}$/.test(text);
 
 // This Mac first, then Herdr's machines. Only a connected machine whose name passes is asked for its inventory;
@@ -117,10 +117,92 @@ export function tabCommand(spaces, machine, name, argv) {
   return { command: "space.new", args: machine ? { machine, name, argv } : { name, argv } };
 }
 
-// `machine add` runs attached in a tab on this Mac (hc and the CLI live here): hc's host key, password and
-// 2FA prompts appear there.
+// The password fallback ("In a tab"): `machine add` attached in a tab on this Mac (hc and the CLI live here), where
+// hc's password and 2FA prompts appear.
 export function addHostCommand(spaces, cli, alias) {
   return tabCommand(spaces, null, `Add ${alias}`, [cli, "machine", "add", alias]);
+}
+
+// "Add a machine": a target typed under the chips (user@host, user@host:port or an ssh alias). Trimmed, then held
+// to the chips' rule; only `ok` starts the add flow, otherwise `note` shows and nothing runs.
+export function typedTarget(text) {
+  const value = typeof text === "string" ? text.trim() : "";
+  return passable(value) ? { ok: true, value, note: "" } : { ok: false, value, note: "Not a target ssh can use" };
+}
+
+export const ADD_NOTE = "Herdr's own \"Add a machine\" can't answer ssh's questions (host key, password, installing "
+  + "herdr-core). Add machines here.";
+
+// The add flow's CLI calls; exec waits longer than the CLI's worst case (tests/js/machine-add.test.mjs reads the
+// guards from cockpit/machines.py and cockpit/hostkeys.py): add --batch is machine ls 15 s + hc machine add 120 s +
+// machine ls 15 s + the probe 45 s = 195 s; hostkey ssh -G 5 + ssh-keygen 5 + ssh-keyscan 12 s; trust 5 + 12 s.
+export const HOSTKEY_EXEC = { timeout: 30000 };
+export const TRUST_EXEC = { timeout: 30000 };
+export const ADD_EXEC = { timeout: 210000 };
+export const hostkeyArgs = (target) => ["machine", "hostkey", target, "--json"];
+export const trustArgs = (target, key) => ["machine", "trust", target, "--type", key.type, "--fingerprint", key.sha256, "--json"];
+export const addBatchArgs = (target) => ["machine", "add", target, "--batch", "--json"];
+export const hostsRemoveArgs = (target) => ["machine", "hosts", "remove", target];
+
+// What `ssh-keygen -l` calls the key type.
+export function keyLabel(type) {
+  const text = plain(type, 64);
+  return /ed25519/.test(text) ? "ED25519" : /ecdsa/.test(text) ? "ECDSA" : /rsa/.test(text) ? "RSA" : text.toUpperCase();
+}
+
+// Only a key of this shape reaches `machine trust`'s argv (the CLI checks it again).
+const usableKey = (k) => typeof k?.type === "string" && /^[a-z0-9][a-z0-9@.-]{0,63}$/.test(k.type)
+  && typeof k?.sha256 === "string" && /^SHA256:[A-Za-z0-9+/]{43}$/.test(k.sha256);
+
+// The add flow, one area under the field. Steps: idle (an optional note), checking (`machine hostkey`), trust (the
+// first offered key, waiting for Trust or Cancel), trusting (`machine trust`), adding (`machine add --batch`),
+// password and tab (both offer "In a tab": a password, keys only, or ssh settings the dialog doesn't handle),
+// failed (the message). `answer`: {event, target, data | message}; one for another
+// step or target (a late answer after Cancel) changes nothing, and a start waits until a running step ends.
+export const IDLE = { step: "idle" };
+const RUNNING = ["checking", "trusting", "adding"];
+export const busy = (state) => RUNNING.includes(state?.step);
+
+export function nextStep(state, answer) {
+  const event = answer?.event;
+  if (event === "start") return busy(state) ? state : { step: "checking", target: answer.target };
+  if (event === "cancel") return IDLE;
+  if (answer?.target !== state?.target) return state;
+  const failed = (message) => ({ step: "failed", target: state.target, message: plain(message, 300) || "moshi-cockpit gave no answer" });
+  if (event === "error" && busy(state)) return failed(answer.message);
+  const inTab = (message) => ({ step: "tab", target: state.target, message: plain(message, 300) || `Add ${state.target} in a tab.` });
+  if (event === "hostkey" && state.step === "checking") {
+    if (answer.data?.needs === "tab") return inTab(answer.data.message);
+    if (answer.data?.known === true) return { step: "adding", target: state.target };
+    const key = Array.isArray(answer.data?.keys) ? answer.data.keys[0] : null;
+    return usableKey(key) ? { step: "trust", target: state.target, key: { type: key.type, sha256: key.sha256 } }
+      : failed(`${state.target} offered no host key`);
+  }
+  if (event === "trust" && state.step === "trust") return { ...state, step: "trusting" };
+  if (event === "trusted" && state.step === "trusting") return { step: "adding", target: state.target };
+  if (event === "added" && state.step === "adding") {
+    const data = answer.data;
+    if (data?.ok === true) return data.message ? { step: "idle", note: plain(data.message, 300) } : IDLE;
+    if (data?.needs === "password") return { step: "password", target: state.target };
+    if (data?.needs === "key" || data?.needs === "tab") return inTab(data.message);
+    return failed(data?.message);
+  }
+  return state;
+}
+
+// What the flow area shows: a line, its tone and the buttons ("trust", "cancel", "tab"); null for nothing.
+export function flowView(state) {
+  const line = (text, tone = "dim", buttons = []) => ({ text, tone, buttons });
+  const target = plain(state?.target, 254);
+  switch (state?.step) {
+    case "checking": case "trusting": return line(`Checking ${target}\u2026`);
+    case "trust": return line(`Trust ${target}? ${keyLabel(state.key.type)} ${state.key.sha256}`, "foreground", ["trust", "cancel"]);
+    case "adding": return line(`Adding ${target} and installing herdr-core there\u2026`);
+    case "password": return line(`${target} asks for a password. Set up an ssh key for it, or answer in a tab.`, "foreground", ["tab"]);
+    case "tab": return line(state.message, "foreground", ["tab"]);
+    case "failed": return line(state.message, "blocked");
+    default: return state?.note ? line(state.note) : null;
+  }
 }
 
 // "+ Agent" → New: where the agent starts. This Mac, then each machine whose layout Herdr has read; a name hc

@@ -119,9 +119,24 @@ Clicking a cell does what its symbol says (its tooltip names the state):
   `opencode auth login`.
 
 A machine that is not connected, or that Herdr is still connecting to, shows a short note in its row instead
-of the cells. Under the grid, "From ~/.ssh/config" lists the hosts Herdr does not know yet as **+ host** chips.
-A chip runs `moshi-cockpit machine add` in a tab, where the host key, password or 2FA prompts of
-`hc machine add` appear, and then prints the six states of the new machine.
+of the cells. Under the grid you add machines without a terminal. Herdr's own "Add a machine" can't answer ssh's
+questions (host key, password, installing herdr-core), so the tab does it:
+
+- **Chips.** "From ~/.ssh/config" lists the hosts Herdr does not know yet, "Saved" the targets you typed earlier
+  (kept in `~/.config/moshi-cockpit/hosts.json`; the small × forgets one). A chip starts the add.
+- **Add a machine** takes a target you type (`user@host`, `user@host:port` or an ssh alias), so a host needs no
+  entry in `~/.ssh/config`. Enter or **Add** starts the add; the target is saved once hc is asked to add it
+  (an ssh alias is not saved).
+- **Host key.** When the machine's key is not in `~/.ssh/known_hosts`, the tab shows its type and SHA256
+  fingerprint and asks **Trust** or **Cancel**. Trust checks the key again and adds only that key's line to
+  `~/.ssh/known_hosts`; if it changed in between, nothing is trusted.
+- **Adding.** `hc machine add --install` then runs without a terminal: it installs herdr-core there without
+  asking. The new machine's six states appear in the grid.
+- **Passwords.** The add logs in with ssh keys only. A machine that asks for a password shows "asks for a
+  password" and **In a tab**, which runs `moshi-cockpit machine add` in a tab where hc asks for it. Passwords
+  never pass through the cockpit. **In a tab** is also offered when none of your keys work, and for a host
+  whose ssh settings the dialog doesn't follow exactly (ProxyJump or ProxyCommand, HostKeyAlias, other
+  known_hosts files, `HashKnownHosts yes`, as `ssh -G` reports them).
 
 The inventory is asked when the tab opens (a machine checked less than a minute ago is shown from the cache),
 after `machine add`, and when you press **Refresh** next to the time a machine was last checked. Nothing polls. A
@@ -180,9 +195,13 @@ and activation is skipped.
 | `rules show` | Show your own rules for every agent. |
 | `rules set [--text TEXT]` | Set your own rules (from stdin without `--text`; empty removes them) and set the agents up again. `install` never overwrites them. |
 | `harness install NAME` | Install a missing agent CLI (`claude`, `codex`, `vibe`, `agy`, `grok`, `opencode`) on this Mac with the vendor's official installer, after showing the command and asking. |
-| `machine list [--json]` | Herdr's machines (name, state, target) and the hosts in `~/.ssh/config` that Herdr does not know yet. |
+| `machine list [--json]` | Herdr's machines (name, state, target), the hosts in `~/.ssh/config` and the saved hosts that Herdr does not know yet. |
 | `machine inventory [--on NAME] [--refresh] [--json]` | The six agent CLIs on this Mac, or on the machine `NAME` from `machine list`, each Ready, Installed, not signed in, or Missing. A result younger than a minute comes from the cache; `--refresh` asks again. |
-| `machine add ALIAS` | Add an ssh host (a `Host` from `~/.ssh/config` or `user@host`) to Herdr with `hc machine add`, attached to your terminal, then show its inventory. |
+| `machine add ALIAS` | Add an ssh host (a `Host` from `~/.ssh/config`, `user@host` or `user@host:port`) to Herdr with `hc machine add`, attached to your terminal, then show its inventory. |
+| `machine add TARGET --batch [--json]` | The same without a terminal (the Machines tab): saves the target, installs herdr-core there without asking and answers with the new machine's inventory, or that it needs a password or a host key. |
+| `machine hosts add\|remove TARGET` | Add a target to your saved hosts, or forget it. |
+| `machine hostkey TARGET [--json]` | Whether the host's key is in `~/.ssh/known_hosts`, else the keys it offers with their SHA256 fingerprints; a host with ssh settings the dialog doesn't handle gets `needs: "tab"` instead. |
+| `machine trust TARGET --type TYPE --fingerprint SHA256:… [--json]` | Check the host's key again and add it to `~/.ssh/known_hosts` only if type and fingerprint still match. |
 | `sessions [AGENT] [--harness H] [--folder DIR] [--limit N] [--json]` | An agent's sessions that can be resumed. Give either an agent or `--harness`. `--limit` defaults to 8. |
 
 ### Exit codes

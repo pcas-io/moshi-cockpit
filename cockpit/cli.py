@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, harness_install, installer, launch, legacy, machines, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, removal, sessions, status, wizard
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -90,14 +90,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     mac = sub.add_parser("machine", help="the machines Herdr reaches over ssh and the agent CLIs on each")
     mac_sub = mac.add_subparsers(dest="machine_command", required=True)
-    mac_list = mac_sub.add_parser("list", help="Herdr's machines and the ssh hosts not added yet")
+    mac_list = mac_sub.add_parser("list", help="Herdr's machines and the ssh and saved hosts not added yet")
     mac_list.add_argument("--json", action="store_true")
     mac_inv = mac_sub.add_parser("inventory", help="which agent CLIs a machine has and whether each is signed in")
     mac_inv.add_argument("--on", metavar="NAME", help="a machine from `machine list` (default: this Mac)")
     mac_inv.add_argument("--refresh", action="store_true", help="check again, even within a minute of the last check")
     mac_inv.add_argument("--json", action="store_true")
     mac_add = mac_sub.add_parser("add", help="add an ssh host to Herdr (hc machine add), then show its agent CLIs")
-    mac_add.add_argument("alias", help="a Host from ~/.ssh/config or user@host")
+    mac_add.add_argument("alias", help="a Host from ~/.ssh/config, user@host or user@host:port")
+    mac_add.add_argument("--batch", action="store_true",
+                         help="without a terminal (the Machines tab): installs herdr-core there, never asks; "
+                              "a password or an unknown host key comes back as the answer")
+    mac_add.add_argument("--json", action="store_true")
+    mac_hosts = mac_sub.add_parser("hosts", help="your own list of hosts that are not in ~/.ssh/config")
+    mac_hosts.add_argument("hosts_command", choices=["add", "remove"])
+    mac_hosts.add_argument("target")
+    mac_key = mac_sub.add_parser("hostkey", help="whether a host's key is known, else the keys it offers")
+    mac_key.add_argument("target")
+    mac_key.add_argument("--json", action="store_true")
+    mac_trust = mac_sub.add_parser("trust", help="add a host's key to ~/.ssh/known_hosts after checking it again")
+    mac_trust.add_argument("target")
+    mac_trust.add_argument("--type", required=True, help="the key type `machine hostkey` showed")
+    mac_trust.add_argument("--fingerprint", required=True, help="the SHA256:… fingerprint `machine hostkey` showed")
+    mac_trust.add_argument("--json", action="store_true")
 
     ses = sub.add_parser("sessions", help="an agent's sessions that can be resumed (for the session picker)")
     ses.add_argument("agent", nargs="?", help="name of an agent; without it --harness")
@@ -403,6 +418,8 @@ def cmd_machine(args: argparse.Namespace, paths: Paths) -> int:
             print(f"{clean(m['name'], '?', limit=40):<24}{clean(m['state'], '?', limit=20):<14}{clean(m['target'], '', limit=80)}")
         if found["ssh_hosts"]:
             print("Not added yet (from ~/.ssh/config): " + ", ".join(clean(h, "?", limit=80) for h in found["ssh_hosts"]))
+        if found["saved_hosts"]:
+            print("Not added yet (saved): " + ", ".join(clean(h, "?", limit=80) for h in found["saved_hosts"]))
         if found.get("problem"):
             print(f"Note: {found['problem']}")
         return 0
@@ -416,7 +433,33 @@ def cmd_machine(args: argparse.Namespace, paths: Paths) -> int:
         for row in result["harnesses"]:
             print(f"{row['label']:<14}{row['state_text']}")
         return 0
-    return _machine_add(args, paths)
+    if args.machine_command == "add" and not args.batch:
+        return _machine_add(args, paths)
+    return _machine_flow(args, paths)
+
+
+def _machine_flow(args: argparse.Namespace, paths: Paths) -> int:
+    """The Machines tab's add flow, one JSON answer per step (text without --json): hosts, hostkey, trust,
+    add --batch. A structured answer of `add --batch` (ok or not) exits 0; only our own errors exit 1."""
+    store = BackupStore(paths.state)
+    if args.machine_command == "hosts":
+        change = hosts.add_host if args.hosts_command == "add" else hosts.remove_host
+        change(paths, store, args.target)
+        print(json.dumps({"ok": True}))
+        return 0
+    if args.machine_command == "hostkey":
+        result = hostkeys.hostkey(args.target, machines.run_capture, paths.home)
+        text = result.get("message") or ("known" if result["known"] else
+                                         "  ".join(f"{k['type']} {k['sha256']}" for k in result["keys"]))
+    elif args.machine_command == "trust":
+        _, host, port = hostkeys.resolve(args.target, machines.run_capture, paths.home)
+        hostkeys.trust(host, port, args.type, args.fingerprint, machines.run_capture, paths.home, args.target)
+        result, text = {"ok": True}, f"{args.target}: host key trusted"
+    else:
+        result = machines.add_batch(paths, store, args.alias, machines.run_capture, machines.run_batch)
+        text = result.get("message") or (f"{result['machine']} was added" if result["ok"] else "not added")
+    print(json.dumps(result, ensure_ascii=False) if args.json else clean(text, "?", limit=500))
+    return 0
 
 
 def _machine_add(args: argparse.Namespace, paths: Paths) -> int:
