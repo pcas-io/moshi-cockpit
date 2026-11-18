@@ -11,6 +11,10 @@ export const HERDR_KEYS = { ...HERDR_APP, opencode: "opencode" };
 
 export const STATE_TEXT = { ready: "Ready", installed: "Installed, not signed in", missing: "Missing" };
 
+// exec's options for `machine inventory`: longer than the CLI's own 45 s guard (PROBE_TIMEOUT in
+// cockpit/machines.py), so a slow machine ends in the CLI's "<machine> did not answer: …", not in exec's timeout.
+export const INVENTORY_EXEC = { timeout: 60000 };
+
 export function inventoryArgs(machine, refresh) {
   return ["machine", "inventory", ...(machine ? ["--on", machine] : []), ...(refresh ? ["--refresh"] : []), "--json"];
 }
@@ -45,10 +49,21 @@ export function hostRows(hosts) {
   });
 }
 
+// Herdr opens a tab on another machine only once it has read that machine's layout (machines() says "ready");
+// this Mac always can.
+export function layoutReady(ms, machine) {
+  if (machine == null) return true;
+  return (ms ?? []).some((m) => m?.name === machine && m?.layout === "ready");
+}
+
+export const connectingNote = (machine) => `Herdr is still connecting to ${machine}`;
+
 // A harness row's button. Installing on another machine asks here first (the command runs there as the ssh
-// user); on this Mac `moshi-cockpit harness install` asks y/N in its own tab.
-export function harnessAction(row, machine) {
+// user); on this Mac `moshi-cockpit harness install` asks y/N in its own tab. `ready`: layoutReady() for that
+// machine; until then no button (the view shows connectingNote once for the machine).
+export function harnessAction(row, machine, ready = true) {
   const none = { kind: null, label: "", argv: null, confirm: null, note: "" };
+  if (machine && !ready) return none;
   if (row?.state === "installed") {
     return { ...none, kind: "sign-in", label: "Sign in", argv: row.login_argv ?? row.start_argv };
   }
@@ -79,20 +94,25 @@ export function whereChoices(ms) {
   return [{ name: null, label: "This Mac" }, ...remote.map((m) => ({ name: m.name, label: m.name }))];
 }
 
+// Herdr's own check on that machine (knownAgents({on}) → `known`) finds this harness with a command to run it.
+function herdrRun(row, known) {
+  const app = (Array.isArray(known) ? known : []).find((a) => a?.key === HERDR_KEYS[row?.name]);
+  return app?.installed && Array.isArray(app.run) && app.run.length > 0 ? app.run : null;
+}
+
 // The harness chips for another machine, from its inventory rows: ready and installed (the first start signs
-// in) can start; missing is explained.
-export function remoteChips(rows, machine) {
-  return (Array.isArray(rows) ? rows : []).filter((r) => Object.prototype.hasOwnProperty.call(HERDR_KEYS, r?.name)).map((r) => ({
-    name: r.name, label: plain(r.label, 40),
-    selectable: r.state === "ready" || r.state === "installed",
-    note: r.state === "missing" ? `missing on ${machine}: install it under Machines` : "",
-  }));
+// in) can start, and so can one Herdr's own check finds there (`known`); the rest of missing is explained.
+export function remoteChips(rows, machine, known = null) {
+  return (Array.isArray(rows) ? rows : []).filter((r) => Object.prototype.hasOwnProperty.call(HERDR_KEYS, r?.name)).map((r) => {
+    const selectable = r.state === "ready" || r.state === "installed" || herdrRun(r, known) !== null;
+    return { name: r.name, label: plain(r.label, 40), selectable,
+             note: r.state === "missing" && !selectable ? `missing on ${machine}: install it under Machines` : "" };
+  });
 }
 
 // space.new's arguments: Herdr's own command when its check on that machine finds the harness, else the
 // inventory's start command. Nothing goes to moshi or agents.json.
 export function remoteStart(machine, row, known) {
-  const app = (known ?? []).find((a) => a?.key === HERDR_KEYS[row.name]);
-  const argv = app?.installed && Array.isArray(app.run) && app.run.length > 0 ? app.run : row.start_argv;
+  const argv = herdrRun(row, known) ?? row.start_argv;
   return { machine, name: plain(row.label, 40), argv };
 }

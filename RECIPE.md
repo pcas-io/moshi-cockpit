@@ -18,8 +18,9 @@ sidebar. The "+" menu is a copy of Herdr's own, with the installed agent CLIs an
   Connect again" or "moshi not reachable". The first two are clickable and open the connect dialog.
 - **"+" menu.** "Connect to moshi…" (only while this Mac is not connected), "New agent…", "Manage agents…", "Machine…".
 - **Agents dialog** (640 by 460). Agents on the left, the selected agent's role and skill on the right with
-  Save and Remove, or "+ Agent" with two tabs, **New** (name, harness, role, ocellio skill) and **From
-  moshi** (agents in moshi that are not on this Mac, each with "Running on <label>" where that is so).
+  Save and Remove, or "+ Agent" with three tabs, **New** (name, harness, role, ocellio skill), **From
+  moshi** (agents in moshi that are not on this Mac, each with "Running on <label>" where that is so) and
+  **Machines** (below).
   Harnesses that `moshi-cockpit` does not find are greyed out with an Install button ("found by Herdr, not on
   moshi-cockpit's PATH" when only Herdr finds one); `grok` is not offered under New, it has no identity of its
   own.
@@ -75,8 +76,10 @@ fixed pane), and the layout `cockpit.json`, written by `moshi-cockpit install` f
   sign-ins and the standard agents), `agent.focus`, `space.new` (also on a machine), `space.select`,
   `space.move` and `app.settings`.
 - Programs it runs: `~/.local/bin/moshi-cockpit`, which is the command line tool in this repository, and
-  Herdr's `hc` (`machine ls`, by mesh-spaces). On a machine you pick, it opens the vendor's install or login
-  command of a harness in a visible tab, after you confirm an install.
+  from mesh-spaces (inherited from Herdr's spaces list): `git rev-parse`, `git symbolic-ref` and `git rev-list`
+  for each space's branch, here and on other machines; Herdr's `hc machine ls`; and, only when you reconnect a
+  machine that was rebuilt, `hc machine rm` and `hc machine add … --name`. On a machine you pick, it opens the
+  vendor's install or login command of a harness in a visible tab, after you confirm an install.
 - Art: none. The package ships no images; the Vibe entry has no icon.
 - Install: `curl -fsSL https://github.com/pcas-io/moshi-cockpit/releases/latest/download/install.sh | sh`
   copies the mods and the layout; then open Herdr and switch to the `cockpit` layout.

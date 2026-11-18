@@ -71,7 +71,8 @@ creating or loading an agent reopens the same dialog; the installation and the a
 
 ## Add an agent
 
-"+ Agent" (in the "+" menu as "New agent…", or in the agents dialog) has two tabs:
+"+ Agent" (in the "+" menu as "New agent…", or in the agents dialog) has three tabs, **New**, **From moshi**
+and **Machines** (see [Machines](#machines)):
 
 - **New:** a name (letters, digits, `_` and `-`), a harness, and optionally a role and an ocellio skill the
   agent loads at its start. Harnesses are `claude`, `codex`, `vibe` and `agy`; `grok` connects through your
@@ -110,7 +111,7 @@ A row has one button where one applies:
 
 - **Install** (Missing). On this Mac it runs `moshi-cockpit harness install`, which asks y/N in its tab. On
   another machine the dialog shows the vendor's command first and runs it only after you confirm, in a new
-  tab on that machine, as your SSH login user, in your home directory, never with `sudo`. A machine without
+  tab on that machine, as your SSH login user, into your home directory, never with `sudo`. A machine without
   `curl` shows a note instead of the button.
 - **Sign in** (Installed, not signed in). Opens a tab on that machine with the vendor's login command:
   `claude auth login`, `codex login --device-auth`, `vibe --setup`, `agy` (its first start signs in),
@@ -123,7 +124,7 @@ and then prints the six states of the new machine.
 The inventory is asked when the tab opens (a machine checked less than a minute ago is shown from the cache),
 after `machine add`, and when you press **Refresh** on a machine. Nothing polls. A machine that does not answer
 shows one error line and keeps its last good result in the cache. Machines that are not connected are listed
-and checked once they are.
+and checked the next time the Machines tab opens after they are; nothing re-checks them on its own.
 
 ## Spaces
 

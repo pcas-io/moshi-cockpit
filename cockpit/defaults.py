@@ -227,7 +227,7 @@ def install_cockpit_layout(paths: Paths, backup: BackupStore) -> str:
 
 TABS_OPENS_MENU = 'openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })'
 TABS_OPENS_OURS = 'openOverlay({ mod: "mesh-new-menu", kind: "popup", width: 250, height: 640 })'
-NEW_MENU_UPSTREAM = "163ca2db28639df5"  # installed.json of the herdr-app our mesh-new-menu was copied from
+NEW_MENU_UPSTREAM = "2f13095cb116c3cf"  # installed.json of the herdr-app our mesh-new-menu was copied from
 SPACES_UPSTREAM = "bbcc823778bd7475"  # installed.json of the herdr-app our mesh-spaces was copied from
 MOD_SUFFIXES = {".js", ".json", ".svg", ".png"}
 

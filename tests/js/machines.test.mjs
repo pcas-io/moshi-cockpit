@@ -1,8 +1,10 @@
 // The Machines tab of "+ Agent": machine rows, harness actions and the tabs they open. Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HERDR_KEYS, STATE_TEXT, addHostCommand, harnessAction, hostRows, inventoryArgs, machineRows, passable,
-         remoteChips, remoteStart, tabCommand, whereChoices } from "../../share/herdr-mods/mesh-agents/machines.js";
+import { HERDR_KEYS, INVENTORY_EXEC, STATE_TEXT, addHostCommand, connectingNote, harnessAction, hostRows, inventoryArgs,
+         layoutReady, machineRows, passable, remoteChips, remoteStart, tabCommand, whereChoices }
+  from "../../share/herdr-mods/mesh-agents/machines.js";
+import { readFileSync } from "node:fs";
 
 const CLI = "/Users/x/.local/bin/moshi-cockpit";
 const HELD = (cmd) => ["/bin/sh", "-lc", `${cmd}; read -r _`];
@@ -17,6 +19,18 @@ test("inventory args", () => {
   assert.deepEqual(inventoryArgs(null, true), ["machine", "inventory", "--refresh", "--json"]);
   assert.deepEqual(inventoryArgs("devbox", false), ["machine", "inventory", "--on", "devbox", "--json"]);
   assert.deepEqual(inventoryArgs("build-1", true), ["machine", "inventory", "--on", "build-1", "--refresh", "--json"]);
+});
+
+test("inventory waits longer than the CLI's own 45 s guard", () => {
+  // exec's timeout above PROBE_TIMEOUT (cockpit/machines.py), so a slow machine shows the CLI's "did not answer"
+  assert.deepEqual(INVENTORY_EXEC, { timeout: 60000 });
+  // every inventory call of the views (util.js imports the host, so the call is checked in the source)
+  for (const file of ["machines-view.js", "main.js"]) {
+    const source = readFileSync(new URL(`../../share/herdr-mods/mesh-agents/${file}`, import.meta.url), "utf8");
+    const calls = source.match(/cockpit\(exec, home, inventoryArgs\([^)]*\)[^)]*\)/g) ?? [];
+    assert.ok(calls.length > 0, file);
+    for (const call of calls) assert.match(call, /, true, INVENTORY_EXEC\)$/, `${file}: ${call}`);
+  }
 });
 
 test("machine rows put this Mac first and explain disconnected machines", () => {
@@ -143,6 +157,21 @@ test("remote chips allow installed and ready, explain missing", () => {
   assert.equal(remoteChips([row("ready", { label: "Co\u001b[2Jdex" })], "devbox")[0].label, "Co [2Jdex");
 });
 
+test("a harness Herdr finds there can start even when the probe says missing", () => {
+  const rows = [row("missing"), row("missing", { name: "opencode", label: "OpenCode" })];
+  const known = [{ key: "codex", name: "Codex", run: ["codex"], installed: true },
+                 { key: "opencode", name: "OpenCode", run: ["opencode"], installed: false }];
+  assert.deepEqual(remoteChips(rows, "devbox", known), [
+    { name: "codex", label: "Codex", selectable: true, note: "" },
+    { name: "opencode", label: "OpenCode", selectable: false, note: "missing on devbox: install it under Machines" },
+  ]);
+  // Herdr's run is what starts it
+  assert.deepEqual(remoteStart("devbox", rows[0], known), { machine: "devbox", name: "Codex", argv: ["codex"] });
+  // installed without a command to run, or knownAgents() failed: still missing
+  assert.equal(remoteChips(rows, "devbox", [{ key: "codex", run: [], installed: true }])[0].selectable, false);
+  assert.equal(remoteChips(rows, "devbox", null)[0].selectable, false);
+});
+
 test("remote start uses Herdr's own command when it knows the harness", () => {
   assert.deepEqual(HERDR_KEYS, { claude: "claude", codex: "codex", vibe: "vibe", agy: "antigravity", grok: "grok",
                                  opencode: "opencode" });
@@ -162,4 +191,24 @@ test("remote start falls back to the inventory's start argv", () => {
   assert.deepEqual(remoteStart("devbox", row("ready"), [{ key: "claude", run: ["claude"], installed: true }]).argv, start);
   assert.deepEqual(remoteStart("devbox", row("ready"), null).argv, start);
   assert.deepEqual(remoteStart("devbox", row("ready"), [{ key: "codex", run: [], installed: true }]).argv, start);
+});
+
+test("install and sign in wait until Herdr has the machine's layout", () => {
+  const ms = [{ name: null, layout: "ready" }, { name: "devbox", layout: "ready" }, { name: "build-1", layout: "loading" },
+              { name: "build-2", layout: "unavailable" }];
+  assert.equal(layoutReady(ms, null), true);  // this Mac always
+  assert.equal(layoutReady(undefined, null), true);
+  assert.equal(layoutReady(ms, "devbox"), true);
+  for (const name of ["build-1", "build-2", "build-9"]) assert.equal(layoutReady(ms, name), false, name);
+  assert.equal(layoutReady(undefined, "devbox"), false);
+  const missing = row("missing", { install_argv: HELD("curl -fsSL x | sh"), install_command: "curl -fsSL x | sh" });
+  const signedOut = row("installed", { login_argv: HELD("codex login --device-auth") });
+  const none = { kind: null, label: "", argv: null, confirm: null, note: "" };
+  for (const r of [missing, signedOut, row("missing", { install_command: "x" })]) {
+    assert.deepEqual(harnessAction(r, "build-1", layoutReady(ms, "build-1")), none);
+  }
+  assert.equal(harnessAction(missing, "devbox", layoutReady(ms, "devbox")).kind, "install");
+  assert.equal(harnessAction(signedOut, "devbox", true).kind, "sign-in");
+  assert.equal(harnessAction(signedOut, null, layoutReady(ms, null)).kind, "sign-in");
+  assert.equal(connectingNote("build-1"), "Herdr is still connecting to build-1");
 });

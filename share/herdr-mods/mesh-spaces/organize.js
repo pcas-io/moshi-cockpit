@@ -96,13 +96,22 @@ export function addToGroup(pins, groups, groupId, id) {
   return { pins: unpin(pins, id), groups: moved };
 }
 
-// A new group with this one space in it, the space out of any other group. The name loses control characters
-// and is trimmed; it has 1 to 40 characters and is unique on its machine, ignoring case. Invalid: unchanged.
+// A group name without control characters, runs of white space as one space, trimmed.
+const cleanName = (name) => String(name ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+const nameTaken = (groups, machine, clean) =>
+  groups.some((g) => on(g.machine, machine) && g.name.toLowerCase() === clean.toLowerCase());
+
+// Why newGroup refuses this name: taken on that machine (ignoring case), else its length.
+export function nameRefusal(groups, machine, name) {
+  return nameTaken(groups, machine, cleanName(name)) ? "Taken on this machine" : "1–40 characters";
+}
+
+// A new group with this one space in it, the space out of any other group. The name is cleaned (cleanName);
+// it has 1 to 40 characters and is unique on its machine, ignoring case. Invalid: unchanged.
 export function newGroup(groups, machine, name, id, newId) {
-  const clean = String(name ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+  const clean = cleanName(name);
   const size = [...clean].length;
-  const taken = groups.some((g) => on(g.machine, machine) && g.name.toLowerCase() === clean.toLowerCase());
-  if (size < 1 || size > NAME_MAX || taken) return groups;
+  if (size < 1 || size > NAME_MAX || nameTaken(groups, machine, clean)) return groups;
   return [...removeFromGroup(groups, id), { id: newId, name: clean, machine: machine ?? null, spaces: [id] }];
 }
 

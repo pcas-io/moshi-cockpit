@@ -34,9 +34,10 @@ export function plain(text, max = 300) {
   return String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim().slice(0, max);
 }
 
-// Runs a moshi-cockpit subcommand and returns parsed JSON (or the raw text with asJson=false).
-export async function cockpit(exec, home, args, asJson = true) {
-  const r = await exec(`${home()}/.local/bin/moshi-cockpit`, args);
+// Runs a moshi-cockpit subcommand and returns parsed JSON (or the raw text with asJson=false). `options` go to
+// exec as they are (a longer timeout, say).
+export async function cockpit(exec, home, args, asJson = true, options = undefined) {
+  const r = await exec(`${home()}/.local/bin/moshi-cockpit`, args, options);
   if (r.code !== 0) throw new Error(plain(r.stderr || `moshi-cockpit ${args[0]} failed`).replace(/^Error: /, ""));
   return asJson ? JSON.parse(r.stdout) : r.stdout.trim();
 }

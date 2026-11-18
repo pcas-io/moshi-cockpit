@@ -16,7 +16,7 @@ import { catalogRows, settle } from "./catalog.js";
 import { loadSessions, startKey, startView } from "./start.js";
 import { connectKey, connectView, openConnect } from "./connect.js";
 import { loadMachines, machinesTab } from "./machines-view.js";
-import { inventoryArgs, remoteChips, remoteStart, whereChoices } from "./machines.js";
+import { INVENTORY_EXEC, inventoryArgs, remoteChips, remoteStart, whereChoices } from "./machines.js";
 
 const KNOWN = "new-menu.agents";  // mesh-new-menu keeps knownAgents() here, per machine ("" = this one)
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
@@ -196,7 +196,7 @@ export default class MeshAgents extends View {
     this.remote[name] = entry;
     cx.spawn(async (cx) => {
       const [inv, known] = await Promise.all([
-        cockpit(exec, home, inventoryArgs(name, false)).then(
+        cockpit(exec, home, inventoryArgs(name, false), true, INVENTORY_EXEC).then(
           (d) => (Array.isArray(d?.harnesses) ? { rows: d.harnesses } : { error: "moshi-cockpit gave no inventory" }),
           (e) => ({ error: plain(e?.message ?? e, 300) })),
         knownAgents({ on: name }).catch(() => null),
@@ -208,7 +208,7 @@ export default class MeshAgents extends View {
 
   startRemote(machine, cx) {
     const entry = this.remote[machine];
-    const chip = remoteChips(entry?.rows, machine).find((c) => c.name === this.remoteHarness && c.selectable);
+    const chip = remoteChips(entry?.rows, machine, entry?.known).find((c) => c.name === this.remoteHarness && c.selectable);
     const row = chip && entry.rows.find((r) => r.name === chip.name);
     if (!row) { this.problem = "Choose a harness"; cx.notify(); return; }
     run("space.new", remoteStart(machine, row, entry.known));
@@ -370,7 +370,7 @@ export default class MeshAgents extends View {
   // Another machine: its harnesses from the inventory, Start opens a new space there.
   remoteForm(t, machine) {
     const entry = this.remote[machine];
-    const chips = remoteChips(entry?.rows, machine);
+    const chips = remoteChips(entry?.rows, machine, entry?.known);
     const notes = chips.filter((c) => c.note);
     return v_flex().w_full().gap(10)
       .when(!entry || entry.loading, (el) => el.child(div().text_size(12).text_color(t.dim).child(`Checking ${machine}…`)))

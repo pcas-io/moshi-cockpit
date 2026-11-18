@@ -13,7 +13,7 @@ this repository; if the two ever disagree, the code is right and this file is a 
 | Keychain, `ocellio-default` / `default` | Your ocellio token, if you use ocellio. |
 | Keychain, `ocellio-<agent>` / `<agent>` | A copy of it for each agent. |
 | `~/.config/moshi-cockpit/` | `config.json` (server addresses, which server each token is bound to, the registration token's expiry), `agents.json` (your agents), `rules.md` (your own rules). Files holding settings are written owner-only. |
-| `~/.local/state/moshi-cockpit/` | `inventory.json`, the machine inventory cache (see Machines); `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
+| `~/.local/state/moshi-cockpit/` | `inventory.json`, the machine inventory cache (see Machines); `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); `inventory.lock`, the lock that keeps two inventory runs from writing the cache at once; a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
 | `~/.local/share/moshi-cockpit/` | The installed release, the pinned Python runtime, and per agent the files its harness needs (a Vibe profile, say). |
 | `~/.gemini/config/mcp_config.json` | Only with an agy agent: its moshi and ocellio tokens, in plain text, mode 0600 (see below). |
 
@@ -96,7 +96,8 @@ yes. The cockpit adds no installer a vendor does not publish.
 - **Inventory.** One fixed shell script is run on the machine (through `hc exec` for a remote one). Nothing
   is put into it. For each of the six agent CLIs it tests that the program exists and whether it is signed
   in, by an exit code (`claude auth status`, `codex login status`) or by whether a file exists (Vibe's
-  `.env`, Grok's `auth.json`). Where a vendor offers neither (`agy`, `opencode`) the state is unknown and
+  `.env`, Grok's `auth.json`; for `claude` its `.credentials.json`, only when `claude auth status` cannot
+  answer, that is exits with neither 0 nor 1). Where a vendor offers neither (`agy`, `opencode`) the state is unknown and
   shown as "Installed, not signed in". Output of the vendor commands is discarded; no credential file is
   read, and no token is in an argument list, the cache or a log.
 - **Cache.** `~/.local/state/moshi-cockpit/inventory.json` (mode 0600) holds per machine the time, whether
@@ -104,7 +105,7 @@ yes. The cockpit adds no installer a vendor does not publish.
   replaces it. The inventory is asked only when the Machines tab opens, after `machine add` and on Refresh;
   nothing polls.
 - **Installs on a remote machine.** The vendor's own one-liner (the same fixed commands as `harness install`)
-  runs on the machine as the SSH login user, in that user's home directory, in a tab you can see, after you
+  runs on the machine as the SSH login user, into that user's home directory, in a tab you can see, after you
   confirm the command in the dialog. The cockpit never uses `sudo`. As with the local installers, the
   command is the vendor's pipe-to-shell command and you trust the vendor for it. Signing in runs the
   vendor's login command in a visible tab; you complete it there.

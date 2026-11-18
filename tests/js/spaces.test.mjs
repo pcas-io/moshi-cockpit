@@ -2,8 +2,8 @@
 // Run: node --test tests/js/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GROUPS, PINS, addToGroup, blocks, filterRows, matches, newGroup, pin, prune, removeFromGroup, sections, unpin,
-         validEntries }
+import { GROUPS, PINS, addToGroup, blocks, filterRows, matches, nameRefusal, newGroup, pin, prune, removeFromGroup, sections,
+         unpin, validEntries }
   from "../../share/herdr-mods/mesh-spaces/organize.js";
 import { act, groupAction, menuItems } from "../../share/herdr-mods/mesh-spaces/menu.js";
 
@@ -213,4 +213,19 @@ test("More opens Herdr's own space menu", () => {
     act(more.action, host);
     assert.deepEqual(host.calls, [["close"], ["openOverlay", spec]]); // closes ours first, writes nothing
   }
+});
+
+test("a refused group name says why", () => {
+  const groups = [{ id: "g1", name: "Web", machine: "devbox", spaces: ["devbox/s1"] },
+                  { id: "g2", name: "Ops", machine: null, spaces: ["s3"] }];
+  for (const taken of ["Web", " web ", "WEB\u0007"]) {
+    assert.equal(groupAction([], groups, "devbox", taken, "devbox/s2", "g-x"), null);
+    assert.equal(nameRefusal(groups, "devbox", taken), "Taken on this machine");
+  }
+  for (const size of ["", "  ", "x".repeat(41)]) {
+    assert.equal(groupAction([], groups, "devbox", size, "devbox/s2", "g-x"), null);
+    assert.equal(nameRefusal(groups, "devbox", size), "1–40 characters");
+  }
+  // a name taken only on another machine is free here
+  assert.notEqual(groupAction([], groups, "devbox", "Ops", "devbox/s2", "g-x"), null);
 });

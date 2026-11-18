@@ -3,7 +3,7 @@
 // host calls and builders in as `panel.kit` (menuInit). An action is data: {writes: [[key, list]]} for the shared
 // store, {ask: true} for the group name field, {open: overlay} for More…, null for the note.
 
-import { GROUPS, PINS, addToGroup, newGroup, pin, removeFromGroup, unpin, validEntries } from "./organize.js";
+import { GROUPS, PINS, addToGroup, nameRefusal, newGroup, pin, removeFromGroup, unpin, validEntries } from "./organize.js";
 
 const on = (a, b) => (a ?? null) === (b ?? null);
 
@@ -58,12 +58,16 @@ const stored = (kit, key) => validEntries(key, kit.shared(key));
 // closeOverlay, props}.
 export function menuInit(panel, kit) {
   const p = kit.props() ?? {};
-  Object.assign(panel, { view: "menu", kit, target: p.target?.id, machine: p.machine ?? null, nested: Boolean(p.nested), asking: false });
+  Object.assign(panel, { view: "menu", kit, target: p.target?.id, machine: p.machine ?? null, nested: Boolean(p.nested), asking: false,
+                         refused: null });
   panel.groupName = kit.InputState.new({ placeholder: "Group name" });
-  panel.groupName.on("submit", () => {
-    const action = groupAction(stored(kit, PINS), stored(kit, GROUPS), panel.machine, panel.groupName.value(),
-                               panel.target, `g-${Date.now().toString(36)}`);
+  panel.groupName.on("submit", (_e, cx) => {
+    const groups = stored(kit, GROUPS), name = panel.groupName.value();
+    const action = groupAction(stored(kit, PINS), groups, panel.machine, name, panel.target, `g-${Date.now().toString(36)}`);
+    // A refused name keeps the field open with the reason under it.
+    panel.refused = action ? null : nameRefusal(groups, panel.machine, name);
     act(action, host(panel));
+    cx?.notify();
   });
 }
 
@@ -84,13 +88,16 @@ export function menuView(panel, t) {
     if (key === "divider") return div().h(1).mx(4).my(5).bg(t.border).flex_none();
     if (key === "note") return div().px(9).py(6).text_size(11.5).text_color(t.dim).child(label);
     if (key === "new-group" && panel.asking) {
-      return div().px(4).py(2).flex_none()
-        .child(Input.new(panel.groupName).w_full().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background));
+      return v_flex().px(4).py(2).flex_none()
+        .child(Input.new(panel.groupName).w_full().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background))
+        .when(Boolean(panel.refused), (el) => el.child(div().px(4).pt(3).text_size(11).text_color(t.dim).child(panel.refused)));
     }
     return h_flex().id(`space-menu-${key}`).h(31).px(9).rounded(7).items_center().flex_none()
       .text_color(t.foreground).hover((s) => s.bg(t.selected))
       .on_click((_e, cx) => { act(action, host(panel)); if (action?.ask) cx.notify(); })
       .child(div().flex_1().min_w(0).truncate().child(label));
   };
-  return v_flex().id("space-menu").w_full().bg(t.popover).p(5).text_size(12.8).children(items.map(row));
+  // The column fills the popup and scrolls, so More… and the name field stay reachable with many groups.
+  return v_flex().id("space-menu").size_full().min_h(0).overflow_y_scrollbar().bg(t.popover).p(5).text_size(12.8)
+    .children(items.map(row));
 }
