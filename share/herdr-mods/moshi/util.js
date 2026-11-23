@@ -1,6 +1,9 @@
 // Small helpers of the "Your agents" list.
 
 import { div } from "gpui-kit";
+import { plain } from "./list.js";
+
+export { plain };
 
 // One button style for the whole panel, sized for easy clicking. on = selected, enabled = false for a
 // disabled one, primary = the one main action (green, the theme's "done" color in light and dark).
@@ -27,11 +30,6 @@ export function dotColor(t, presence) {
   if (presence === "live") return t.working;
   if (presence === "stale") return t.idle;
   return t.dim;
-}
-
-// Control characters (escapes, BEL, CR/LF) out of any text that came from a server or a process.
-export function plain(text, max = 300) {
-  return String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim().slice(0, max);
 }
 
 // Runs a moshi-cockpit subcommand and returns parsed JSON (or the raw text with asJson=false).

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, removal, sessions, status, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, remote, removal, sessions, status, targets, wizard
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -21,6 +21,7 @@ from cockpit.paths import Paths
 from cockpit.registry import load_agents
 from cockpit.secrets import KeychainError, default_store
 from cockpit.text import clean
+from cockpit.tokens import DEVICE, bound_origin
 
 APPROVAL_EXIT = 3  # shared with the mods: the panel opens the connect dialog
 ACTIVE_ELSEWHERE_EXIT = 4  # shared with the mods: stdout {"active": label}, the panel offers a takeover
@@ -51,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     stat = sub.add_parser("status", help="moshi mesh overview (read with this Herdr's device key)")
     stat.add_argument("--json", action="store_true", help="compact JSON (for the sidebar in Herdr)")
 
-    sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
+    con = sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
+    con.add_argument("--label", help="the installation's name in moshi (default: this machine's host name)")
     sub.add_parser("migrate", help="move the agents of an earlier setup to this installation (after connect)")
 
     agt = sub.add_parser("agent", help="manage agents (name, harness, role)")
@@ -105,6 +107,18 @@ def build_parser() -> argparse.ArgumentParser:
     mac_rm = mac_sub.add_parser("remove", help="remove a machine from Herdr (hc machine rm); its terminals keep running there")
     mac_rm.add_argument("name", help="a machine from `machine list`")
     mac_rm.add_argument("--json", action="store_true")
+    mac_cockpit = mac_sub.add_parser("cockpit", help="moshi-cockpit on a machine: installed, connected, its agents")
+    mac_cockpit.add_argument("--on", metavar="NAME", required=True, help="a machine from `machine list`")
+    mac_cockpit.add_argument("--refresh", action="store_true", help="check again, even within a minute of the last check")
+    mac_cockpit.add_argument("--json", action="store_true")
+    mac_agent = mac_sub.add_parser("agent", help="add or load an agent in moshi-cockpit on a machine, or list moshi's")
+    mac_agent.add_argument("--on", metavar="NAME", required=True, help="a machine from `machine list`")
+    mac_agent.add_argument("action", choices=remote.ACTIONS)
+    mac_agent.add_argument("name", nargs="?")
+    mac_agent.add_argument("--harness", help=f"for add: {', '.join(remote.OWN_HARNESSES)}")
+    mac_agent.add_argument("--role", default="", help="for add: role and personality in a few words")
+    mac_agent.add_argument("--skill", default="", help="for add: name of an ocellio skill the agent loads at its start")
+    mac_agent.add_argument("--json", action="store_true")
     mac_hosts = mac_sub.add_parser("hosts", help="your own list of hosts that are not in ~/.ssh/config")
     mac_hosts.add_argument("hosts_command", choices=["add", "remove"])
     mac_hosts.add_argument("target")
@@ -196,7 +210,7 @@ def cmd_install(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
-    """Undoes every change outside the person's own settings folder; that folder and the Keychain stay."""
+    """Undoes every change outside the person's own settings folder; that folder and the tokens stay."""
     settings = paths.mesh_config.parent
     notes = BackupStore(paths.state).restore_all(keep=settings)
     for note in notes or ["nothing to restore"]:
@@ -206,11 +220,20 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
     def short(path: Path) -> str:
         return "~/" + str(path.relative_to(paths.home)) if paths.home in path.parents else str(path)
 
-    print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), the Keychain entries "
-          f"(moshi-… and ocellio-…), the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself. "
+    if paths.headless:
+        store = default_store(lambda: "Linux", paths.home)
+        tokens = f"the tokens in {store.name}"
+        delete = f"delete {short(paths.secrets_file)} (or the moshi-cockpit entries in your keyring)"
+        last = f" and the state folder {short(paths.state)}/"  # no Herdr app on this machine
+    else:
+        tokens = "the Keychain entries (moshi-… and ocellio-…)"
+        delete = "delete the moshi-… and ocellio-… entries in Keychain Access"
+        last = f", the state folder {short(paths.state)}/ and Herdr itself"
+    print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), {tokens}, "
+          f"the app in {short(app)}/{last}. "
           f"Earlier copies of your settings (*.bak-…) stay in {short(settings)}/ too.")
-    print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, delete the moshi-… "
-          "and ocellio-… entries in Keychain Access, and revoke this installation in the moshi dashboard.")
+    print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, {delete}, "
+          "and revoke this installation in the moshi dashboard.")
     return 0
 
 
@@ -234,7 +257,8 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
     unconnected = connect.needs_connect(paths, config, keychain)
     if args.json:
         print(status.as_json(mesh, local, {name: config.has(name) for name in SERVERS}, wizard.harness_offer(paths),
-                             status.problems(paths), unconnected, connect.approval_valid(paths, keychain)))
+                             status.problems(paths), unconnected, connect.approval_valid(paths, keychain),
+                             remote.cached_agents(paths)))
         return 0
     if config.has("moshi") and not unconnected:
         print(status.render(mesh))
@@ -253,8 +277,10 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
     (not after stdin closed: nobody can press it)."""
     code, wait = 1, True
     try:
+        label = _machine_name(args.label)
         ctx = _context(paths)
-        code = connect.run(ctx, connect.ConnectIO(), MoshiApi(require(load_config(paths), "moshi")))
+        code = connect.run(ctx, connect.ConnectIO(), MoshiApi(require(load_config(paths), "moshi")), label=label,
+                           headless=paths.headless)
     except (KeychainError, MoshiError, ValueError, OSError) as exc:  # OSError: network, browser
         print(f"Error: {clean(str(exc), '?', limit=500)}", file=sys.stderr)
     except KeyboardInterrupt:
@@ -266,6 +292,12 @@ def cmd_connect(args: argparse.Namespace, paths: Paths) -> int:
     if wait and sys.stdin.isatty():
         _hold_tab()
     return code
+
+
+def _machine_name(label: Optional[str]) -> Optional[str]:
+    if label is not None and not targets.NAME_RE.fullmatch(label):
+        raise ValueError(f"Not a machine name: {clean(label, '?', limit=64)}")
+    return label
 
 
 def cmd_migrate(args: argparse.Namespace, paths: Paths) -> int:
@@ -343,11 +375,18 @@ def _agent_set(ctx: AgentContext, args: argparse.Namespace) -> int:
 def _agent_list(ctx: AgentContext, args: argparse.Namespace) -> int:
     paths = ctx.paths
     found = load_agents(paths, enforce=False)
-    if args.json:
+    if args.json:  # also the probe from the Mac (remote.PROBE_SCRIPT): it answers even when the store fails
         config = load_config(paths)
-        print(json.dumps({"agents": status.local_agents(paths, config, ctx.keychain),
+        try:
+            connected = (config.has("moshi") and ctx.keychain.exists(*connect.DEVICE_ENTRY)
+                         and bound_origin(paths, DEVICE) is not None)
+            local = status.local_agents(paths, config, ctx.keychain)
+        except KeychainError:  # a locked keyring or a refused token file: the agents stay, none counts as connected
+            connected, local = False, status.local_agents(paths, config, _StoreDown())
+        print(json.dumps({"agents": local,
                           "harnesses": wizard.harness_offer(paths),
-                          "servers": {name: config.has(name) for name in SERVERS}}, ensure_ascii=False))
+                          "servers": {name: config.has(name) for name in SERVERS},
+                          "version": __version__, "connected": connected}, ensure_ascii=False))
         return 0
     for a in found:
         print(f"{a.name:<20}{a.harness:<10}{a.role}")
@@ -355,6 +394,14 @@ def _agent_list(ctx: AgentContext, args: argparse.Namespace) -> int:
     for problem in registry.single_instance_problems(found):
         print(f"Note: {problem}")
     return 0
+
+
+class _StoreDown:
+    """Stands in for a store that failed, for display only: every entry counts as missing."""
+    name = "unavailable"
+
+    def exists(self, service: str, account: str) -> bool:
+        return False
 
 
 def _agent_remove(ctx: AgentContext, args: argparse.Namespace) -> int:
@@ -438,11 +485,36 @@ def cmd_machine(args: argparse.Namespace, paths: Paths) -> int:
         return 0
     if args.machine_command == "remove":
         result = machines.remove_machine(paths, args.name, machines.run_capture)
+        remote.forget(paths, args.name)
         print(json.dumps(result) if args.json else f"{clean(args.name, '?', limit=254)} removed from Herdr")
         return 0
     if args.machine_command == "add" and not args.batch:
         return _machine_add(args, paths)
+    if args.machine_command in ("cockpit", "agent"):
+        return _machine_remote(args, paths)
     return _machine_flow(args, paths)
+
+
+def _machine_remote(args: argparse.Namespace, paths: Paths) -> int:
+    """moshi-cockpit on a machine: its state (`cockpit`), or a forwarded agent call whose exit code is the remote's
+    answer (0/1/3; 1 also when the machine did not answer)."""
+    if args.machine_command == "cockpit":
+        result = remote.cockpit_state(paths, args.on, machines.run_capture, refresh=args.refresh)
+        print(json.dumps(result, ensure_ascii=False) if args.json else f"{args.on}: {result['state_text']}")
+        return 0
+    code, answer = remote.agent_call(paths, args.on, args.action, machines.run_capture, name=args.name,
+                                     harness=args.harness, role=args.role, skill=args.skill)
+    if args.json:
+        print(json.dumps(answer, ensure_ascii=False))
+        return code
+    for note in answer["notes"]:
+        print(f"• {note}")
+    for row in answer.get("agents") or []:
+        where = f"running on {row['active_installation']}" if row["active_installation"] else ""
+        print(f"{row['name']:<20}{row['harness']:<10}{row['role'][:30]:<32}{where}")
+    if answer["message"]:
+        print(answer["message"], file=sys.stdout if answer["ok"] else sys.stderr)
+    return code
 
 
 def _machine_flow(args: argparse.Namespace, paths: Paths) -> int:

@@ -6,7 +6,7 @@
 export const HERDR_APP = { claude: "claude", codex: "codex", vibe: "vibe", agy: "antigravity", grok: "grok" };
 
 // herdr's display names, for when knownAgents() has not answered.
-const NAMES = { claude: "Claude Code", codex: "Codex", vibe: "Vibe", agy: "Antigravity", grok: "Grok" };
+export const NAMES = { claude: "Claude Code", codex: "Codex", vibe: "Vibe", agy: "Antigravity", grok: "Grok" };
 
 // Shown when herdr finds a harness (its login shell may define it) that `moshi-cockpit run` cannot start.
 export const HERDR_ONLY = "found by Herdr, not on moshi-cockpit's PATH";

@@ -73,7 +73,8 @@ def _validate(raw: object, harnesses: Optional[List[str]] = None) -> Agent:
     harness = str(raw.get("harness") or "")
     if harnesses is not None and harness not in harnesses:
         raise ValueError(f"Agent '{name}': unknown harness '{harness[:40]}'")
-    # One line, control characters (NUL, ESC, …) out, bounded; the panel does the same (rules.js roleText).
+    # One line, control characters (NUL, ESC, …) out, bounded; the panel (rules.js roleText) strips format
+    # characters too, so whatever it sends passes here.
     role = bound_role(" ".join(_CONTROL.sub(" ", str(raw.get("role") or "")).split()))
     skill = str(raw.get("skill") or "")
     if skill and not NAME_RE.fullmatch(skill):

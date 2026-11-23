@@ -242,14 +242,15 @@ def _row(ctx: AgentContext, agent: Dict[str, Any], local: List[Agent]) -> Dict[s
 
     harness, skill, active = text("harness", 40), text("skill", 64), text("active_installation", 64)
     known = HARNESSES.get(harness)
-    reason = _not_loadable(harness, local)
+    reason = _not_loadable(harness, local, "machine" if ctx.paths.headless else "Mac")
     return {"name": agent["name"], "harness": harness, "role": text("role", MAX_ROLE),
             "skill": skill if NAME_RE.fullmatch(skill) else "", "active_installation": active or None,
             "harness_installed": bool(known and known.installed(ctx.paths)), "loadable": not reason, "reason": reason}
 
 
-def _not_loadable(harness: str, local: List[Agent]) -> str:
-    """Why `load` would refuse an agent of this harness here; empty when it would not (check_harness)."""
+def _not_loadable(harness: str, local: List[Agent], here: str = "Mac") -> str:
+    """Why `load` would refuse an agent of this harness here (`here`: "Mac", or "machine" on a Linux machine);
+    empty when it would not (check_harness)."""
     known = HARNESSES.get(harness)
     if known is None:
         return f"harness {harness} is unknown here" if harness else "no harness in moshi"
@@ -257,7 +258,7 @@ def _not_loadable(harness: str, local: List[Agent]) -> str:
         return f"{harness} cannot run agents of its own"
     taken = [a.name for a in local if a.harness == harness]
     if known.single_instance and taken:
-        return f"one {harness} agent per Mac, taken by '{taken[0]}'"
+        return f"one {harness} agent per {here}, taken by '{taken[0]}'"
     return ""
 
 

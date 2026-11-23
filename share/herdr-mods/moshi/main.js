@@ -1,12 +1,14 @@
 // "Your agents" in the sidebar, below herdr's Spaces and Agents: the person's own agents
 // with their moshi presence. Reads only `moshi-cockpit status --json`: the token stays in the keychain behind the
-// CLI, this mod never sees it. Starting, creating and removing live in the mesh-agents dialog.
+// CLI, this mod never sees it. Starting, creating and removing live in the mesh-agents dialog. The agents of Linux
+// machines ("on <machine>") come in the same answer, from the CLI's cache of those machines: no hc call, no new timer;
+// only those of machines Herdr still lists (machines()) show.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, exec, home, layout, notify, openOverlay, panes, run, setShared, spaces, theme } from "herdr";
+import { agents, exec, home, layout, machines, notify, openOverlay, panes, run, setShared, spaces, theme } from "herdr";
 import { ago, btn, cockpit, dotColor, plain } from "./util.js";
-import { ownAgents, runningTerminal, sidebarLine } from "./list.js";
+import { ownAgents, remoteCommand, runningTerminal, sidebarLine } from "./list.js";
 
 const POLL_MS = 30000;
 const CONNECT_POLL_MS = 3000; // back in herdr right after the connect tab finished, not half a minute later
@@ -91,23 +93,29 @@ export default class Moshi extends View {
     });
   }
 
-  // Always the choice of the "+" menu, new or resume; a running tab is one more entry there.
+  // A local agent: always the choice of the "+" menu, new or resume; a running tab is one more entry there.
+  // An agent of a Linux machine: its running tab, else `moshi-cockpit run` in a tab there (which asks to take over).
   activate(a) {
+    const running = runningTerminal(a.name, agents());
+    if ((a.machine || !a.installed) && running) return run("agent.focus", { terminal: running });
+    if (a.machine) {
+      const start = remoteCommand(spaces(), a);
+      return start ? run(start.command, start.args) : undefined;
+    }
     if (!a.installed) {
-      const running = runningTerminal(a.name, agents());
-      if (running) return run("agent.focus", { terminal: running });
       return notify({ title: "Your agents", body: `${a.name}: ${a.harness} is not installed here`, level: "info" });
     }
     openOverlay({ mod: "mesh-agents", kind: "dialog", width: 460, height: 460,
                   props: { view: "start", agent: a.name, label: a.name, space: spaces().find((s) => s.active)?.id,
                            folder: panes().find((p) => p.focused)?.cwd,
-                           terminal: runningTerminal(a.name, agents()) ?? undefined } });
+                           terminal: running ?? undefined } });
   }
 
   // One line, sizes as in herdr's Agents list: name and status in the list's text size, the time smaller.
   row(t, a) {
     const terminal = runningTerminal(a.name, agents());
-    const about = [a.harness, a.role, a.installed ? "" : "not installed"].filter(Boolean).join(" · ");
+    const about = [a.harness, a.role, a.installed ? "" : "not installed", a.machine ? `on ${a.machine}` : ""]
+      .filter(Boolean).join(" · ");
     const when = [terminal ? "↗" : "", a.last_seen_at ? ago(a.last_seen_at) : ""].filter(Boolean).join(" · ");
     return h_flex().id(`own-${a.name}`).px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
       .hover((s) => s.bg(t.hover)).tooltip(about).on_click(() => this.activate(a))
@@ -121,13 +129,13 @@ export default class Moshi extends View {
   // Dots only in the rail, as herdr's list does there.
   dot(t, a) {
     return h_flex().id(`own-${a.name}`).h(26).flex_none().items_center().justify_center()
-      .hover((s) => s.bg(t.hover)).tooltip(a.name).on_click(() => this.activate(a))
+      .hover((s) => s.bg(t.hover)).tooltip(a.machine ? `${a.name} on ${a.machine}` : a.name).on_click(() => this.activate(a))
       .child(div().w(8).h(8).rounded(4).bg(dotColor(t, a.presence)));
   }
 
   render() {
     const t = theme();
-    const list = ownAgents(this.data?.local, this.data?.agents);
+    const list = ownAgents(this.data?.local, this.data?.agents, this.data?.remote, machines());
     const collapsed = narrow();
     const line = sidebarLine(this.data);
     return v_flex().id("own-agents").size_full().min_h(0).bg(t.chrome).border_t(1).border_color(t.border).text_size(13)

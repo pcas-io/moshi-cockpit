@@ -3,8 +3,9 @@
 A cockpit for coding agents inside Herdr. The sidebar of the stock layout gets a third list, "Your agents",
 with each of your own agents and whether it is online in moshi. A "+ Agent" dialog creates an agent, loads one
 that exists in moshi or installs a missing agent CLI, and starting an agent that runs on another computer asks
-before it takes it over. A Machines tab shows the agent CLIs on this Mac and on Herdr's machines, and the
-spaces list gets a filter, pins and groups.
+before it takes it over. A Machines tab shows the agent CLIs on this Mac and on Herdr's machines, installs and
+connects moshi-cockpit on Herdr's Linux machines so agents there get their own moshi identity, and the spaces
+list gets a filter, pins and groups.
 
 ## What you see
 
@@ -13,9 +14,11 @@ block called "Your agents" (id `own-agents`, weight 1, minimum 90) sits directly
 sidebar. The "+" menu is a copy of Herdr's own, with the installed agent CLIs and up to four more rows:
 
 - **Your agents** (sidebar). One row per agent: a presence dot, the name, the harness, and under it what the
-  agent is working on and when it was last seen. Order: live, stale, offline, never seen, then by name. A
-  single line replaces the list when something is wrong: "Not connected to moshi", "Disconnected from moshi —
-  Connect again" or "moshi not reachable". The first two are clickable and open the connect dialog.
+  agent is working on and when it was last seen. Order: live, stale, offline, never seen, then by name. The
+  agents of Herdr's Linux machines are in the same list with their moshi presence; the row's tooltip names the
+  machine ("on <machine>"), and only machines Herdr still lists show. A single line replaces the list when
+  something is wrong: "Not connected to moshi", "Disconnected from moshi — Connect again" or "moshi not
+  reachable". The first two are clickable and open the connect dialog.
 - **"+" menu.** "Connect to moshi…" (only while this Mac is not connected), "New agent…", "Manage agents…", "Machine…".
 - **Agents dialog** (640 by 460). Agents on the left, the selected agent's role and skill on the right with
   Save and Remove, or "+ Agent" with three tabs, **New** (name, harness, role, ocellio skill), **From
@@ -27,7 +30,10 @@ sidebar. The "+" menu is a copy of Herdr's own, with the installed agent CLIs an
 - **Machines tab.** In the agents dialog's "+ Agent": this Mac and each Herdr machine with the six harnesses
   (`claude`, `codex`, `vibe`, `agy`, `grok`, `opencode`) as Ready, Installed, not signed in or Missing, with
   Install, Sign in and Refresh, and the hosts of `~/.ssh/config` with Add. "Where" in New starts an agent on
-  another machine.
+  another machine. A Linux machine's row also shows moshi-cockpit there: "moshi: Install", "moshi: Update" (only
+  when its version is older than this Mac's), "moshi: Connect", "moshi ✓ <agents>" once connected, or "moshi: ?"
+  with the reason in its tooltip. With a connected moshi-cockpit there, New and From moshi create or load the
+  agent on that machine.
 - **Spaces list.** A filter field, pinned spaces, groups and a right-click menu (Pin, Move to, New group…,
   Remove from, More…), in the cockpit layout only.
 - **Start dialog.** Opens for an agent: a list of earlier sessions to resume, or a new one.
@@ -58,12 +64,17 @@ Its mods are in `share/herdr-mods/`, each with `"place": "none"` (they open as s
 fixed pane), and the layout `cockpit.json`, written by `moshi-cockpit install` from Herdr's own `main` layout.
 
 - `moshi` ("Your agents"): the sidebar block. Runs `moshi-cockpit status --json` and `doctor --quiet`; reads
-  nothing else. Opens the dialogs with `openOverlay`.
+  nothing else. Opens the dialogs with `openOverlay`. A Linux machine's agent starts as `moshi-cockpit run
+  <name>` in a tab (or a new space) on that machine.
 - `mesh-agents`: the agents dialog, the start dialog and the connect dialog (`props.view`: `manage`, `new`,
   `start`, `connect`; the dialog also has the Machines tab). Runs `agent list|catalog|add|load|set|remove|where`,
-  `sessions`, `machine list` and `machine inventory` through `exec`, and opens `run`, `connect`,
-  `harness install` and `machine add` in a new tab, and install and sign-in commands in a tab on the chosen
-  machine; never a network or a token.
+  `sessions`, `machine list|inventory|hostkey|trust|remove`, `machine add --batch`, `machine hosts remove`,
+  `machine cockpit` (moshi-cockpit's state on a Linux machine) and `machine agent add|load|catalog` (the same
+  calls on that machine) through `exec`. It opens `run`, `connect`, `harness install`, `machine add` and
+  `hc machine login` in a new tab on this Mac; on the chosen machine it opens a tab for a harness's install or
+  sign-in command, the disconnect fix, and on a Linux machine moshi-cockpit's Install or Update (that release's
+  `install.sh`), Connect (`moshi-cockpit connect`) and `moshi-cockpit run <name>`. It never touches a network
+  or a token itself.
 - `mesh-new-menu`: the "+" menu, derived from Herdr's own new-menu (Apache-2.0), plus the rows "Connect to
   moshi…" (only while not connected), "New agent…", "Manage agents…" and "Machine…". Opens `connect` in a new
   tab.
@@ -73,8 +84,8 @@ fixed pane), and the layout `cockpit.json`, written by `moshi-cockpit install` f
 - Herdr functions used: `exec`, `hc`, `home`, `props`, `agents`, `spaces`, `machines`, `panes`, `window`,
   `layout`, `theme`, `keys`, `knownAgents`, `shared`/`setShared`, `watchFolder`, `notify`, `openOverlay`,
   `closeOverlay`, and `run` with `tab.new` (for `run`, `connect`, `harness install`, `machine add`, installs,
-  sign-ins and the standard agents), `agent.focus`, `space.new` (also on a machine), `space.select`,
-  `space.move` and `app.settings`.
+  sign-ins, moshi-cockpit's Install, Update and Connect on a machine, and the standard agents), `agent.focus`,
+  `space.new` (also on a machine), `space.select`, `space.move` and `app.settings`.
 - Programs it runs: `~/.local/bin/moshi-cockpit`, which is the command line tool in this repository, and
   from mesh-spaces (inherited from Herdr's spaces list): `git rev-parse`, `git symbolic-ref` and `git rev-list`
   for each space's branch, here and on other machines; Herdr's `hc machine ls`; and, only when you reconnect a
@@ -82,17 +93,20 @@ fixed pane), and the layout `cockpit.json`, written by `moshi-cockpit install` f
   vendor's install or login command of a harness in a visible tab, after you confirm an install.
 - Art: none. The package ships no images; the Vibe entry has no icon.
 - Install: `curl -fsSL https://github.com/pcas-io/moshi-cockpit/releases/latest/download/install.sh | sh`
-  copies the mods and the layout; then open Herdr and switch to the `cockpit` layout.
+  copies the mods and the layout; then open Herdr and switch to the `cockpit` layout. On a Linux machine,
+  Install in its Machines row runs the same installer headless (no Herdr there).
 
 ## Watch out
 
 - Herdr must be installed first, from herdr.dev. The versions tested are listed in `cockpit/compat.py`; other
   versions work with a warning in `moshi-cockpit doctor`.
-- macOS on Apple silicon only for now.
+- Herdr on macOS on Apple silicon; Herdr's remote Linux machines (x86_64, aarch64) run moshi-cockpit headless.
+  Herdr desktop on Linux comes later.
 - Mods run with full rights and these run programs: read them before you add them. They never see a
-  token; tokens live in the Keychain behind the CLI. See `docs/security.md`.
+  token; tokens live behind the CLI: in the Keychain on the Mac, and on a Linux machine in the Secret Service or
+  a file with mode 0600, on that machine only. See `docs/security.md`.
 - The cockpit layout is generated from Herdr's `main` layout at install time. If a later Herdr changes `main`,
   run `moshi-cockpit install` again. `mesh-spaces` and `mesh-new-menu` are copies of Herdr's own mods;
   `moshi-cockpit doctor` warns when Herdr changes the original.
-- No moshi on other machines in this release: a harness started there runs without it.
+- A harness started through "Where" on a machine without a connected moshi-cockpit runs without moshi.
 - moshi and ocellio are optional. Without moshi there is no presence and no takeover; agents start locally.

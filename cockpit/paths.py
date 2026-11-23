@@ -4,9 +4,10 @@ no agent names here: servers come from config.py, agents from registry.py."""
 from __future__ import annotations
 
 import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
 from cockpit import __version__
 
@@ -24,16 +25,19 @@ class Paths:
     home: Path
     herdr_app_home: Path
     applications: Path
+    headless: bool = False  # a Linux machine driven from Herdr on the Mac: no browser, no desktop here
 
     @classmethod
-    def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Paths":
+    def from_env(cls, env: Optional[Mapping[str, str]] = None,
+                 system: Callable[[], str] = platform.system) -> "Paths":
         env = os.environ if env is None else env
         home = Path(env.get("HOME") or str(Path.home()))
         app_home = env.get("HERDR_APP_HOME")
         if not app_home:
             config_root = env.get("XDG_CONFIG_HOME") or str(home / ".config")
             app_home = str(Path(config_root) / "herdr-app")
-        return cls(home=home, herdr_app_home=Path(app_home), applications=Path("/Applications"))
+        return cls(home=home, herdr_app_home=Path(app_home), applications=Path("/Applications"),
+                   headless=system() == "Linux")
 
     @property
     def config(self) -> Path:
@@ -70,6 +74,11 @@ class Paths:
     @property
     def herdr_app_bundle(self) -> Path:
         return self.applications / "Herdr.app"
+
+    @property
+    def secrets_file(self) -> Path:
+        """The token file of a Linux machine without a usable Secret Service (see secrets/linux.py)."""
+        return self.config / "moshi-cockpit" / "secrets.json"
 
     @property
     def agents_file(self) -> Path:

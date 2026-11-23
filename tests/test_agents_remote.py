@@ -1,5 +1,6 @@
 """Agents in moshi: create, load, catalog, set. FakeMoshi behind MoshiApi, fake keychain, no network."""
 
+import dataclasses
 import io
 import json
 import unittest
@@ -253,6 +254,9 @@ class RemoteAgentsTest(ConnectedHerdr, unittest.TestCase):
         rows = {row["name"]: row for row in agents_remote.catalog(self.ctx, api=self.api)}
         self.assertEqual((rows["a2"]["loadable"], rows["a2"]["reason"]), (False, "one agy agent per Mac, taken by 'a1'"))
         self.assertEqual((rows["bare"]["loadable"], rows["bare"]["reason"]), (False, "no harness in moshi"))
+        linux = dataclasses.replace(self.ctx, paths=dataclasses.replace(self.ctx.paths, headless=True))
+        rows = {row["name"]: row for row in agents_remote.catalog(linux, api=self.api)}  # on a Linux machine
+        self.assertEqual(rows["a2"]["reason"], "one agy agent per machine, taken by 'a1'")
 
     def test_catalog_json_through_the_cli(self):
         self.moshi.add_agent("away", harness="codex", installation_id=None)

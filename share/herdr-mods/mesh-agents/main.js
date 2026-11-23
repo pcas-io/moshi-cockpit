@@ -1,14 +1,16 @@
 // "Manage agents…" and "+ Agent" from the "+" menu and the sidebar: one dialog in the style of herdr's settings,
 // the agents on the left, the selected one or "+ Agent" (tabs New, From moshi and Machines) on the right. New on
-// another machine only starts a harness there in a new space: nothing goes to moshi or agents.json.
+// another machine starts a harness there in a new space (nothing goes to moshi or agents.json), or, with a connected
+// moshi-cockpit there, creates an agent with its own moshi identity in moshi-cockpit there; From moshi loads one
+// there. Such an agent starts in a tab on that machine (remote.js).
 // Everything goes through `moshi-cockpit`: this mod never sees a token. Exit 3 (approval missing or expired) opens
 // the connect dialog; installing a harness and connecting ask in a terminal tab. The logic lives in rules.js,
-// catalog.js, harnesses.js and machines.js (tested with node), the Machines tab in machines-view.js; this file wires
-// the views.
+// catalog.js, harnesses.js, machines.js and remote.js (tested with node), the Machines tab in machines-view.js; this
+// file wires the views.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, home, theme, run, props, closeOverlay, openOverlay, notify, knownAgents, shared, machines } from "herdr";
+import { exec, home, theme, run, props, closeOverlay, openOverlay, notify, knownAgents, shared, machines, spaces } from "herdr";
 import { btn, cockpit, plain } from "./util.js";
 import { addArgs, checkName, checkSkill, loadArgs, outcome, removeArgs, roleText, setArgs } from "./rules.js";
 import { harnessRows } from "./harnesses.js";
@@ -16,15 +18,17 @@ import { catalogRows, settle } from "./catalog.js";
 import { loadSessions, startKey, startView } from "./start.js";
 import { connectKey, connectView, openConnect } from "./connect.js";
 import { closeMachines, loadMachines, machinesLegend, machinesTab } from "./machines-view.js";
-import { INVENTORY_EXEC, inventoryArgs, remoteChips, remoteStart, whereChoices } from "./machines.js";
+import { INVENTORY_EXEC, inventoryArgs, remoteChips, remoteStart, tabCommand, whereChoices } from "./machines.js";
+import { AGENT_EXEC, COCKPIT_EXEC, cockpitArgs, moshiChips, moshiReady, remoteAddArgs, remoteCatalogArgs, remoteLoadArgs,
+         remoteSettle } from "./remote.js";
 
 const KNOWN = "new-menu.agents";  // mesh-new-menu keeps knownAgents() here, per machine ("" = this one)
 const cli = () => `${home()}/.local/bin/moshi-cockpit`;
 
-// A finished call, never a throw: a CLI that could not start reads like any other error.
-async function call(args) {
+// A finished call, never a throw: a CLI that could not start reads like any other error. `options` go to exec.
+async function call(args, options = undefined) {
   try {
-    return await exec(cli(), args);
+    return await exec(cli(), args, options);
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e?.message ?? e) };
   }
@@ -58,9 +62,11 @@ export default class MeshAgents extends View {
     this.catalogProblem = null;
     this.loadProblem = null;
     this.machines = null;  // the Machines tab: machines-view.js keeps its state on this dialog
-    this.where = null;  // New: null = this Mac, else a machine from whereChoices()
-    this.remote = Object.create(null);  // New on another machine: {machine: {loading, rows, error, known}}
+    this.where = null;  // New and From moshi: null = this Mac, else a machine from whereChoices()
+    this.remote = Object.create(null);  // New on another machine: {machine: {loading, rows, error, known, cockpit}}
+    this.remoteCatalog = Object.create(null);  // From moshi on another machine: {machine: {loading, rows, problem, cockpit}}
     this.remoteHarness = null;
+    this.remoteConnect = null;  // the machine whose add or load asked to connect to moshi there
     this.known = shared(KNOWN)?.[""] ?? null;
     this.name = InputState.new({ placeholder: "Name, e.g. research" });
     this.name.on("submit", (_e, cx) => this.create(cx));
@@ -138,6 +144,7 @@ export default class MeshAgents extends View {
     this.harness = null;
     this.where = null;
     this.remoteHarness = null;
+    this.remoteConnect = null;
     this.name.set_value("");
     this.role.set_value("");
     this.skill.set_value("");
@@ -147,9 +154,19 @@ export default class MeshAgents extends View {
   showTab(tab, cx) {
     this.tab = tab;
     if (tab === "new") this.name.focus();
-    if (tab === "moshi" && !this.catalog) this.loadCatalog(cx);
     if (tab === "machines" && !this.machines) loadMachines(this, cx);
+    this.need(cx);
     cx.notify();
+  }
+
+  // What the shown tab needs for the picked machine: asked once, again after an error.
+  need(cx) {
+    const where = this.whereNow();
+    if (this.tab === "new" && where && (!this.remote[where] || this.remote[where].error)) this.loadRemote(where, cx);
+    if (this.tab === "moshi" && where === null && !this.catalog) this.loadCatalog(cx);
+    if (this.tab === "moshi" && where && (!this.remoteCatalog[where] || this.remoteCatalog[where].problem)) {
+      this.loadRemoteCatalog(where, cx);
+    }
   }
 
   loadCatalog(cx) {
@@ -190,25 +207,70 @@ export default class MeshAgents extends View {
     this.where = name;
     this.remoteHarness = null;
     this.problem = null;
-    if (name === null) this.name.focus();
-    else if (!this.remote[name] || this.remote[name].error) this.loadRemote(name, cx);
+    this.loadProblem = null;
+    this.remoteConnect = null;
+    if (name === null && this.tab === "new") this.name.focus();
+    this.need(cx);
     cx.notify();
   }
 
-  // That machine's inventory (the CLI's cached call) and Herdr's own check there, side by side.
+  // That machine's inventory (the CLI's cached call), Herdr's own check there and moshi-cockpit there, side by side.
   loadRemote(name, cx) {
-    const entry = { loading: true, rows: null, error: null, known: null };
+    const entry = { loading: true, rows: null, error: null, known: null, cockpit: null };
     this.remote[name] = entry;
     cx.spawn(async (cx) => {
-      const [inv, known] = await Promise.all([
+      const [inv, known, state] = await Promise.all([
         cockpit(exec, home, inventoryArgs(name, false), true, INVENTORY_EXEC).then(
           (d) => (Array.isArray(d?.harnesses) ? { rows: d.harnesses } : { error: "moshi-cockpit gave no inventory" }),
           (e) => ({ error: plain(e?.message ?? e, 300) })),
         knownAgents({ on: name }).catch(() => null),
+        cockpit(exec, home, cockpitArgs(name, false), true, COCKPIT_EXEC).catch(() => null),  // none: today's form
       ]);
-      Object.assign(entry, { loading: false, rows: inv.rows ?? null, error: inv.error ?? null, known });
+      Object.assign(entry, { loading: false, rows: inv.rows ?? null, error: inv.error ?? null, known, cockpit: state });
       cx.notify();
     });
+  }
+
+  // From moshi on another machine: moshi's agents as moshi-cockpit there sees them, and its state (for Connect).
+  loadRemoteCatalog(name, cx) {
+    const entry = { loading: true, rows: null, problem: null, cockpit: null };
+    this.remoteCatalog[name] = entry;
+    cx.spawn(async (cx) => {
+      const [r, state] = await Promise.all([
+        call(remoteCatalogArgs(name), AGENT_EXEC),
+        cockpit(exec, home, cockpitArgs(name, false), true, COCKPIT_EXEC).catch(() => null),
+      ]);
+      let answer = null;
+      try { answer = JSON.parse(r.stdout); } catch { /* remoteSettle reads stderr then */ }
+      if (r.code === 0 && Array.isArray(answer?.agents)) entry.rows = catalogRows(answer.agents, name);
+      else {
+        const next = r.code === 0 ? { action: "stay", problem: "moshi-cockpit gave no list" } : remoteSettle(r);
+        entry.problem = next.problem;
+        if (next.action === "connect" && this.where === name) this.remoteConnect = name;
+      }
+      Object.assign(entry, { loading: false, cockpit: state });
+      cx.notify();
+    });
+  }
+
+  // After a remote add or load: the agent starts in a tab on that machine; exit 3 → the problem and "Connect to
+  // moshi" there; else the problem stays inline with what was typed.
+  remoteDone(machine, name, next, onProblem) {
+    if (next.action === "start") return this.openOn(machine, name, next.runArgv);
+    this.remoteConnect = next.action === "connect" ? machine : null;
+    onProblem(next.problem);
+  }
+
+  openOn(machine, name, argv) {
+    const next = tabCommand(spaces(), machine, name, argv);
+    run(next.command, next.args);
+    closeOverlay(props().overlay);
+  }
+
+  connectButton(t, machine) {
+    const argv = (this.remote[machine]?.cockpit ?? this.remoteCatalog[machine]?.cockpit)?.connect_argv;
+    return btn("agent-remote-connect", t, "Connect to moshi", () => this.openOn(machine, "Connect to moshi", argv),
+      { enabled: Array.isArray(argv) });
   }
 
   startRemote(machine, cx) {
@@ -223,7 +285,7 @@ export default class MeshAgents extends View {
   create(cx) {
     if (this.busy || this.view !== "new" || this.tab !== "new") return;
     const where = this.whereNow();
-    if (where) return this.startRemote(where, cx);
+    if (where) return moshiReady(this.remote[where]?.cockpit) ? this.remoteCreate(where, cx) : this.startRemote(where, cx);
     const form = { name: this.name.value().trim(), harness: this.harness, role: roleText(this.role.value()),
                    skill: this.skill.value().trim() };
     this.problem = checkName(form.name, this.data?.agents) ?? (form.harness ? null : "Choose a harness") ?? checkSkill(form.skill);
@@ -238,16 +300,43 @@ export default class MeshAgents extends View {
     });
   }
 
-  loadAgent(row, cx) {
-    if (this.busy) return;
+  // An agent with its own moshi identity in moshi-cockpit on that machine; it starts there in a tab.
+  remoteCreate(machine, cx) {
+    const state = this.remote[machine].cockpit;
+    const form = { name: this.name.value().trim(), harness: this.remoteHarness, role: roleText(this.role.value()),
+                   skill: state.ocellio ? this.skill.value().trim() : "" };
+    const chip = moshiChips(state.harnesses, machine).find((c) => c.name === form.harness && c.selectable);
+    this.problem = checkName(form.name, state.agents) ?? (chip ? null : "Choose a harness") ?? checkSkill(form.skill);
+    this.remoteConnect = null;
+    if (this.problem) { cx.notify(); return; }
     this.busy = true;
-    this.loadProblem = null;
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await call(loadArgs(row.name));
+      const next = remoteSettle(await call(remoteAddArgs(machine, form), AGENT_EXEC));
       this.busy = false;
-      this.finish(settle({ name: row.name }, r), row.name, "loaded",
-                  (problem) => { this.loadProblem = { name: row.name, text: problem }; }, cx);
+      this.remoteDone(machine, form.name, next, (problem) => { this.problem = problem; });
+      cx.notify();
+    });
+  }
+
+  loadAgent(row, cx) {
+    if (this.busy) return;
+    const where = this.whereNow();
+    this.busy = true;
+    this.loadProblem = null;
+    this.remoteConnect = null;
+    cx.notify();
+    const onProblem = (problem) => { this.loadProblem = { name: row.name, text: problem }; };
+    cx.spawn(async (cx) => {
+      if (where) {
+        const next = remoteSettle(await call(remoteLoadArgs(where, row.name), AGENT_EXEC));
+        this.busy = false;
+        this.remoteDone(where, row.name, next, onProblem);
+      } else {
+        const r = await call(loadArgs(row.name));
+        this.busy = false;
+        this.finish(settle({ name: row.name }, r), row.name, "loaded", onProblem, cx);
+      }
       cx.notify();
     });
   }
@@ -361,20 +450,27 @@ export default class MeshAgents extends View {
       }));
   }
 
+  // New and From moshi: This Mac and each machine Herdr has the layout of.
+  whereRow(t, choices, where) {
+    return h_flex().w_full().flex_wrap().gap_x(6).gap_y(6).items_center().flex_none()
+      .child(div().text_size(12).text_color(t.dim).child("Where"))
+      .children(choices.map((c, i) => btn(`agent-where-${i}`, t, c.label, (_e, cx) => this.pickWhere(c.name, cx),
+        { on: c.name === where })));
+  }
+
   newTab(t) {
     const choices = whereChoices(machines());
     const where = this.whereNow(choices);
     return v_flex().w_full().gap(10)
-      .child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(6).items_center()
-        .child(div().text_size(12).text_color(t.dim).child("Where"))
-        .children(choices.map((c, i) => btn(`agent-where-${i}`, t, c.label, (_e, cx) => this.pickWhere(c.name, cx),
-          { on: c.name === where }))))
+      .child(this.whereRow(t, choices, where))
       .child(where ? this.remoteForm(t, where) : this.localForm(t));
   }
 
-  // Another machine: its harnesses from the inventory, Start opens a new space there.
+  // Another machine with a connected, current moshi-cockpit: an agent of its own there (name, harness, role, skill).
+  // Otherwise its harnesses from the inventory, and Start opens a new space there.
   remoteForm(t, machine) {
     const entry = this.remote[machine];
+    if (moshiReady(entry?.cockpit)) return this.moshiForm(t, machine, entry.cockpit);
     const chips = remoteChips(entry?.rows, machine, entry?.known);
     const notes = chips.filter((c) => c.note);
     return v_flex().w_full().gap(10)
@@ -388,7 +484,30 @@ export default class MeshAgents extends View {
       .child(h_flex().gap(8).items_center()
         .child(btn("agent-start", t, "Start", (_e, cx) => this.create(cx), { primary: true, enabled: !!entry?.rows }))
         .child(div().text_size(12).text_color(this.problem ? t.blocked : t.dim)
-          .child(this.problem || `Starts in a new space on ${machine}`)));
+          .child(this.problem || `Starts in a new space on ${machine}`)))
+      .when(!!entry && !entry.loading && entry.cockpit?.state !== "unsupported", (el) => el.child(div().text_size(11)
+        .text_color(t.dim).child(`For agents with their own moshi identity on ${machine}: Machines \u2192 moshi`)));
+  }
+
+  moshiForm(t, machine, state) {
+    const chips = moshiChips(state.harnesses, machine);
+    const notes = chips.filter((c) => c.note);
+    return v_flex().w_full().gap(10)
+      .child(this.input(t, this.name))
+      .child(h_flex().w_full().flex_wrap().gap_x(6).gap_y(6).items_center()
+        .children(chips.map((c) => btn(`agent-mh-${c.name}`, t, c.label,
+          (_e, cx) => { this.remoteHarness = c.name; this.problem = null; cx.notify(); },
+          { on: this.remoteHarness === c.name, enabled: c.selectable }))))
+      .when(notes.length > 0, (el) => el.child(div().text_size(11).text_color(t.dim)
+        .child(notes.map((c) => c.note).join(" \u00b7 "))))
+      .child(this.input(t, this.role))
+      .when(!!state.ocellio, (el) => el.child(this.input(t, this.skill)))
+      .child(h_flex().gap(8).items_center()
+        .child(btn("agent-create", t, this.busy ? "Creating\u2026" : `Create on ${machine}`, (_e, cx) => this.create(cx),
+          { primary: true, enabled: !this.busy }))
+        .when(this.remoteConnect === machine, (el) => el.child(this.connectButton(t, machine)))
+        .child(div().flex_1().min_w_0().text_size(12).text_color(this.problem ? t.blocked : t.dim)
+          .child(this.problem || `Starts in a tab on ${machine}`)));
   }
 
   localForm(t) {
@@ -418,17 +537,33 @@ export default class MeshAgents extends View {
         .child(btn(`catalog-load-${r.name}`, t, this.busy ? "Loading…" : "Load", (_e, cx) => this.loadAgent(r, cx),
           { enabled: r.loadable && !this.busy })))
       .when(!!r.note, (el) => el.child(div().text_size(11).text_color(t.dim).child(r.note)))
-      .when(!!problem, (el) => el.child(div().text_size(12).text_color(t.blocked).child(problem)));
+      .when(!!problem, (el) => el.child(this.problemLine(t, problem)));
   }
 
+  // A problem, with "Connect to moshi" when an add or load on the picked machine asked for it.
+  problemLine(t, problem) {
+    const where = this.whereNow();
+    return h_flex().w_full().gap(8).items_center()
+      .child(div().flex_1().min_w_0().text_size(12).text_color(t.blocked).child(problem))
+      .when(!!where && this.remoteConnect === where, (el) => el.child(this.connectButton(t, where)));
+  }
+
+  // moshi's agents for the picked machine: this Mac's from the CLI here, another machine's from moshi-cockpit there.
   moshiTab(t) {
-    const rows = this.catalog ?? [];
-    return v_flex().w_full().flex_1().min_h(0).gap(4).overflow_y_scrollbar()
-      .when(!this.catalog && !this.catalogProblem, (el) => el.child(div().text_size(12).text_color(t.dim).child("Loading moshi's agents…")))
-      .when(!!this.catalogProblem, (el) => el.child(div().text_size(12).text_color(t.blocked).child(this.catalogProblem)))
-      .when(!!this.catalog && rows.length === 0, (el) => el.child(div().text_size(12).text_color(t.dim)
-        .child("Every agent in moshi is on this Mac already.")))
-      .children(rows.map((r) => this.catalogRow(t, r)));
+    const choices = whereChoices(machines());
+    const where = this.whereNow(choices);
+    const remote = where ? this.remoteCatalog[where] : null;
+    const list = where ? remote?.rows ?? null : this.catalog;
+    const problem = where ? remote?.problem ?? null : this.catalogProblem;
+    const rows = list ?? [];
+    return v_flex().w_full().flex_1().min_h(0).gap(10)
+      .child(this.whereRow(t, choices, where))
+      .child(v_flex().w_full().flex_1().min_h(0).gap(4).overflow_y_scrollbar()
+        .when(!list && !problem, (el) => el.child(div().text_size(12).text_color(t.dim).child("Loading moshi's agents\u2026")))
+        .when(!!problem, (el) => el.child(this.problemLine(t, problem)))
+        .when(!!list && rows.length === 0, (el) => el.child(div().text_size(12).text_color(t.dim)
+          .child(`Every agent in moshi is on ${where ?? "this Mac"} already.`)))
+        .children(rows.map((r) => this.catalogRow(t, r))));
   }
 
   // `cx`: render's, for the Machines tab (it reads Herdr's machine list again when Herdr reports a machine ready).

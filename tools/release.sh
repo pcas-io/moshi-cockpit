@@ -47,6 +47,7 @@ fence='```'
 {
   printf 'Install or update on a Mac with Apple silicon (Herdr from https://herdr.dev installed first):\n\n'
   printf '%s\n%s\n%s\n\n' "${fence}sh" "$ONE_LINE" "$fence"
+  printf 'On a Linux machine (x86_64 or aarch64, headless), the same line installs moshi-cockpit without Herdr; the Machines tab in Herdr on your Mac does this for you.\n\n'
   if [ -n "$notes_extra" ]; then
     cat "$notes_extra"
     printf '\n'

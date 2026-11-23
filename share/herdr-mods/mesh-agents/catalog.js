@@ -3,8 +3,9 @@
 
 import { outcome, plain } from "./rules.js";
 
-// moshi's agents that are not here yet: harness, role, and where one runs now.
-export function catalogRows(rows) {
+// moshi's agents that are not here yet: harness, role, and where one runs now. `machine`: the remote machine whose
+// moshi-cockpit gave the rows (From moshi there), null for this Mac.
+export function catalogRows(rows, machine = null) {
   return (rows ?? []).map((r) => {
     const harness = plain(r.harness, 40);
     const active = plain(r.active_installation, 64);
@@ -13,7 +14,8 @@ export function catalogRows(rows) {
       name: plain(r.name, 64), harness, role: plain(r.role, 64),
       where: active ? `Running on ${active}` : "",
       loadable,
-      note: loadable ? (r.harness_installed ? "" : `${harness} is not installed here`) : plain(r.reason, 200),
+      note: loadable ? (r.harness_installed ? "" : `${harness} is not installed ${machine ? `on ${plain(machine, 254)}` : "here"}`)
+        : plain(r.reason, 200),
     };
   });
 }

@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence
 
-from cockpit.secrets import KeychainError, validate_token
+from cockpit.secrets import KeychainError, check_names, validate_token
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -27,6 +27,8 @@ def default_lock_dir() -> Path:
 
 
 class MacKeychain:
+    name = "macOS Keychain"
+
     def __init__(self, runner: Runner = subprocess.run, lock_dir: Optional[Path] = None) -> None:
         self._runner = runner
         self._lock_dir = lock_dir
@@ -76,7 +78,7 @@ class MacKeychain:
         existing entry (an earlier run stopped between the steps) is reported, not guessed at.
         """
         validate_token(secret)
-        _check_names(service, account)
+        check_names(service, account)
         if not strict:
             self._add(service, account, secret, update=True)
             return
@@ -118,7 +120,7 @@ class MacKeychain:
         """After an interrupted strict rewrite (parked copy, no entry): moves it back. True if it did.
 
         The parked copy is checked strict first and stays until the entry is back and checked."""
-        _check_names(service, account)
+        check_names(service, account)
         parked = pending_service(service)
         with self._lock(service, account):
             if self.exists(service, account) or not self.exists(parked, account):
@@ -137,7 +139,7 @@ class MacKeychain:
             raise KeychainError(f"Could not write Keychain entry '{service}'")
 
     def delete(self, service: str, account: str) -> None:
-        _check_names(service, account)
+        check_names(service, account)
         result = _run(self._runner, ["security", "delete-generic-password", "-a", account, "-s", service])
         if result.returncode != 0:
             raise KeychainError(f"Could not delete Keychain entry '{service}'")
@@ -197,9 +199,3 @@ def stale_parked_message(service: str, account: str) -> str:
     return (f"Next to '{service}' there is still the backup '{parked}' from an interrupted run. Which value "
             f"is current is unknown: check, then delete the extra entry, e.g. "
             f"security delete-generic-password -s {parked} -a {account}")
-
-
-def _check_names(service: str, account: str) -> None:
-    for part in (service, account):
-        if not re.match(r"^[A-Za-z0-9._\-]{1,64}$", part):
-            raise KeychainError("Invalid service or account name")

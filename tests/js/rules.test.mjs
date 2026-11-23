@@ -27,6 +27,14 @@ test("roles lose control characters and are bounded like registry._validate", ()
   assert.equal(roleText("😀".repeat(40)).length, 64);
 });
 
+test("roles follow remote.check_role: what it refuses, roleText cleans", () => {
+  // the same samples as tests/test_remote.py test_role_rule_matches_the_dialog: raw → what the dialog sends
+  const samples = [["dev\u200dops", "dev ops"], ["a\u202eb", "a b"], ["a\u2028b", "a b"], ["\ue000x", "x"],
+                   ["soft\u00adhyphen", "soft hyphen"], ["x".repeat(65), "x".repeat(64)],
+                   ["😀".repeat(33), "😀".repeat(32)], ["Code review", "Code review"]];
+  for (const [raw, sent] of samples) assert.equal(roleText(raw), sent, JSON.stringify(raw));
+});
+
 test("arguments never let a value become an option", () => {
   assert.deepEqual(addArgs("a", "codex", ""), ["agent", "add", "a", "--harness=codex"]);
   assert.deepEqual(addArgs("a", "codex", "--rebind"), ["agent", "add", "a", "--harness=codex", "--role=--rebind"]);

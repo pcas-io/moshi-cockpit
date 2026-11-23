@@ -15,8 +15,9 @@ export function checkName(raw, local) {
   return null;
 }
 
-// Role: one line, control characters out, bounded, like registry._validate.
-export const roleText = (raw) => boundRole(String(raw ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+// Role: one line, control and format characters (Unicode category C: escapes, zero-width and direction marks) out,
+// bounded. The same rule as remote.check_role, which refuses what this cleans; registry._validate strips less.
+export const roleText = (raw) => boundRole(String(raw ?? "").replace(/\p{C}+/gu, " ")
   .split(/\s+/).filter(Boolean).join(" "));
 
 // At most MAX_ROLE UTF-16 units, as moshi counts (`.length`), never cutting a character in half

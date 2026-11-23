@@ -1,5 +1,6 @@
 """Acceptance criteria for vendor-neutral agents (no agent CLI or server built in), one test each."""
 
+import dataclasses
 import io
 import json
 import os
@@ -265,6 +266,10 @@ class SingleInstanceRepairTest(unittest.TestCase):  # one-agent rule (agy): refu
         self.assertIn("'a1'", str(caught.exception))
         offer = {h["name"]: h for h in wizard.harness_offer(ctx.paths)}
         self.assertFalse(offer["agy"]["available"])
+        self.assertEqual(offer["agy"]["reason"], "one agent per Mac, taken by 'a1'")
+        linux = dataclasses.replace(ctx.paths, headless=True)  # the same list on a Linux machine
+        self.assertEqual({h["name"]: h for h in wizard.harness_offer(linux)}["agy"]["reason"],
+                         "one agent per machine, taken by 'a1'")
         with mock.patch("cockpit.cli.Paths.from_env", return_value=ctx.paths), redirect_stderr(io.StringIO()) as err:
             self.assertEqual(cli.main(["agent", "add", "a2", "--harness=agy"]), 1)
         self.assertIn("one global config", err.getvalue())

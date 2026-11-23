@@ -378,6 +378,8 @@ class InstallerTest(unittest.TestCase):
 class PlainStore:
     """A SecretStore with only the four protocol methods: no macOS hardening extras."""
 
+    name = "plain store"
+
     def __init__(self, entries=None):
         self.entries = dict(entries or {})
 

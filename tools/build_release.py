@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Renders the release installer: install.sh (the template in the repo root) with the version, the payload's
-SHA-256 and the pinned Python. tools/release.sh calls it; the result is the `install.sh` asset of a release.
+SHA-256 and the pinned Pythons. tools/release.sh calls it; the result is the `install.sh` asset of a release.
 
     python3 tools/build_release.py --version X.Y.Z --payload moshi-cockpit-X.Y.Z.tar.gz --out install.sh
 
@@ -15,19 +15,26 @@ import hashlib
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "install.sh"
 REPO_URL = "https://github.com/pcas-io/moshi-cockpit"
 HERDR_APP = "/Applications/Herdr.app"
 
-# Python for the installed cockpit: python-build-standalone by Astral, CPython 3.12.16, macOS arm64, install_only.
-# Source: https://github.com/astral-sh/python-build-standalone/releases/tag/20261026 (asset list and the
-# release's SHA256SUMS agree), looked up 2026-11-17. A new pin needs both values from that page again.
+# Python for the installed cockpit: python-build-standalone by Astral, CPython 3.12.16, install_only, one per
+# platform install.sh supports (Linux: the glibc builds). Source:
+# https://github.com/astral-sh/python-build-standalone/releases/tag/20261026 (asset digests and the release's
+# SHA256SUMS agree), macOS looked up 2026-11-17, Linux 2026-11-18. A new pin needs both values from that page again.
 PYTHON_VERSION = "3.12.16"
-PYTHON_URL = ("https://github.com/astral-sh/python-build-standalone/releases/download/20261026/"
-              "cpython-3.12.16%2B20261026-aarch64-apple-darwin-install_only.tar.gz")
-PYTHON_SHA256 = "fbf4afef53c2a6b72bb741bc06d5671a9dfaf87bd84e5aa73ac9b3d0d589f14e"
+_ASTRAL = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026"
+PYTHONS: Dict[str, Tuple[str, str]] = {
+    "macos-arm64": (f"{_ASTRAL}-aarch64-apple-darwin-install_only.tar.gz",
+                    "fbf4afef53c2a6b72bb741bc06d5671a9dfaf87bd84e5aa73ac9b3d0d589f14e"),
+    "linux-x86_64": (f"{_ASTRAL}-x86_64-unknown-linux-gnu-install_only.tar.gz",
+                     "6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de"),
+    "linux-aarch64": (f"{_ASTRAL}-aarch64-unknown-linux-gnu-install_only.tar.gz",
+                      "a945427411dc6851a1393533b74a4a1ac434321ae397f2ec69897a9b4fde032b"),
+}
 
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -40,24 +47,31 @@ def default_release_url(version: str) -> str:
     return f"{REPO_URL}/releases/download/v{version}"
 
 
-def render(version: str, payload_sha256: str, *, python_url: str = PYTHON_URL, python_sha256: str = PYTHON_SHA256,
+def render(version: str, payload_sha256: str, *, pythons: Optional[Dict[str, Tuple[str, str]]] = None,
            release_url: Optional[str] = None, herdr_app: str = HERDR_APP, curl_proto: str = "=https") -> str:
-    """The installer for one release. Raises ValueError for anything that is not a plain version, hash or URL."""
+    """The installer for one release. `pythons` holds (url, sha256) for exactly the platforms of PYTHONS.
+    Raises ValueError for anything that is not a plain version, hash or URL."""
     if not VERSION_RE.match(version):
         raise ValueError(f"not a version (X.Y.Z): {version!r}")
-    for name, value in (("payload", payload_sha256), ("python", python_sha256)):
+    pythons = PYTHONS if pythons is None else pythons
+    if set(pythons) != set(PYTHONS):
+        raise ValueError(f"pythons needs exactly {', '.join(sorted(PYTHONS))}, got {', '.join(sorted(pythons))}")
+    hashes = [("payload", payload_sha256)] + [(f"python {key}", sha) for key, (_url, sha) in pythons.items()]
+    for name, value in hashes:
         if not SHA256_RE.match(value):
             raise ValueError(f"not a SHA-256 ({name}): {value!r}")
     values = {
         "VERSION": version,
         "PAYLOAD_SHA256": payload_sha256,
         "PYTHON_VERSION": PYTHON_VERSION,
-        "PYTHON_URL": python_url,
-        "PYTHON_SHA256": python_sha256,
         "RELEASE_URL": release_url or default_release_url(version),
         "HERDR_APP": herdr_app,
         "CURL_PROTO": curl_proto,
     }
+    for key, (url, sha) in pythons.items():
+        name = key.upper().replace("-", "_")
+        values[f"PYTHON_URL_{name}"] = url
+        values[f"PYTHON_SHA256_{name}"] = sha
     for name, value in values.items():
         if not SAFE_VALUE_RE.match(value):
             raise ValueError(f"{name} holds characters the script cannot quote: {value!r}")

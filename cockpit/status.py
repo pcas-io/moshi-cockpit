@@ -122,10 +122,12 @@ def problems(paths) -> List[str]:
 
 def as_json(mesh: Mesh, local: Optional[List[Dict]] = None, servers: Optional[Dict[str, bool]] = None,
             harnesses: Optional[List[Dict]] = None, problems: Optional[List[str]] = None,
-            needs_connect: bool = False, approval_valid: bool = False) -> str:
+            needs_connect: bool = False, approval_valid: bool = False, remote: Optional[List[Dict]] = None) -> str:
     """Compact view for the sidebar in herdr; no webhook or capability details. Without moshi the mesh is
-    empty: the sidebar then shows the local agents without presence."""
-    payload = {"agents": list(mesh.agents), "local": list(local or []), "installation": mesh.installation,
+    empty: the sidebar then shows the local agents without presence. `remote`: the agents of the machines whose
+    moshi-cockpit was last seen connected (remote.cached_agents)."""
+    payload = {"agents": list(mesh.agents), "local": list(local or []), "remote": list(remote or []),
+               "installation": mesh.installation,
                "servers": dict(servers or {}), "harnesses": list(harnesses or []), "problems": list(problems or []),
                "needs_connect": bool(needs_connect), "approval_valid": bool(approval_valid),
                "disconnected": mesh.disconnected, "unreachable": mesh.unreachable}

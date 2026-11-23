@@ -1,4 +1,7 @@
-"""`moshi-cockpit doctor`: one check per concern, FAIL makes the exit code non-zero, WARN informs."""
+"""`moshi-cockpit doctor`: one check per concern, FAIL makes the exit code non-zero, WARN informs.
+
+On a headless Linux machine (Paths.headless) there is no Herdr.app: its checks are left out, herdr-core is asked
+for its version instead. Every platform names the token store in use."""
 
 from __future__ import annotations
 
@@ -8,7 +11,8 @@ from typing import Callable, List, Optional, Tuple
 
 from cockpit import agents, compat, defaults
 from cockpit.compat import FAIL, OK, WARN
-from cockpit.secrets import HardenedStore, SecretStore
+from cockpit.secrets import HardenedStore, KeychainError, SecretStore
+from cockpit.secrets.linux import FileStore
 from cockpit.secrets.macos import pending_service, stale_parked_message
 from cockpit.mcp import McpError, probe_unauthenticated
 from cockpit.config import load_config, origin
@@ -31,11 +35,32 @@ class DoctorContext:
     keychain: SecretStore
     probe: Callable = probe_unauthenticated
     herdr_versions: Callable[[Paths], Tuple[Optional[str], Optional[str]]] = compat.installed_versions
+    core_version: Callable[[Paths], Optional[str]] = compat.headless_core_version
 
 
 def check_herdr(ctx: DoctorContext) -> List[Check]:
     """Herdr is installed from herdr.dev; a version this release was not tested with only warns."""
     return [Check(f.name, f.status, f.detail) for f in compat.check(*ctx.herdr_versions(ctx.paths))]
+
+
+def check_herdr_core(ctx: DoctorContext) -> List[Check]:
+    """A headless machine: herdr-core only, which Herdr on the Mac installs there."""
+    return [Check(f.name, f.status, f.detail) for f in compat.check_core(ctx.core_version(ctx.paths))]
+
+
+def check_store(ctx: DoctorContext) -> List[Check]:
+    """Which store holds the tokens, and whether it can be read: a token file others can read, a symlink or a
+    corrupt one, or a Secret Service that does not answer, is the store's own one sentence. No token is read."""
+    store = ctx.keychain
+    problem = store.permission_problem() if isinstance(store, FileStore) else None
+    if problem is None:
+        try:
+            store.exists(*_non_agent_entry(DEVICE))
+        except KeychainError as exc:
+            problem = str(exc)
+    if problem:
+        return [Check("store", FAIL, problem)]
+    return [Check("store", OK, f"tokens in {store.name}")]
 
 
 def check_telemetry(ctx: DoctorContext) -> List[Check]:
@@ -194,14 +219,22 @@ def check_agents(ctx: DoctorContext) -> List[Check]:
     return results
 
 
-CHECKS = (check_herdr, check_telemetry, check_permissions, check_mods, check_cockpit, check_config,
+CHECKS = (check_herdr, check_telemetry, check_permissions, check_mods, check_cockpit, check_config, check_store,
           check_endpoints, check_agents, check_identities, check_rules, check_menu, check_parked)
+HEADLESS_CHECKS = (check_store, check_herdr_core, check_config, check_endpoints, check_agents, check_identities,
+                   check_rules)
 
 
 def run(ctx: DoctorContext) -> List[Check]:
+    """Every check runs: a store that fails inside one (store.exists/read) is that check's FAIL, named once."""
     results: List[Check] = []
-    for check in CHECKS:
-        results.extend(check(ctx))
+    for check in HEADLESS_CHECKS if ctx.paths.headless else CHECKS:
+        try:
+            results.extend(check(ctx))
+        except KeychainError as exc:
+            detail = str(exc)
+            if not any(r.status == FAIL and r.detail == detail for r in results):  # the store line said it
+                results.append(Check(check.__name__[len("check_"):], FAIL, detail))
     return results
 
 
@@ -228,12 +261,12 @@ def _action(check: Check) -> str:
         return f"{server} answers unexpectedly: Check the server address ({detail})"
     if name.startswith("agent-"):
         return _agent_action(name[len("agent-"):], detail)
-    return detail  # agents, identity-…: these details already name their way out
+    return detail  # store, agents, identity-…: these details already name their way out
 
 
 def _agent_action(agent: str, detail: str) -> str:
     """Goes by the first kind of finding, in the order agents.findings reports them (its wording)."""
-    if "Keychain entry missing" in detail or "not bound to a server" in detail:
+    if any(words in detail for words in ("Keychain entry missing", "Entry missing in ", "not bound to a server")):
         return f"Agent {agent} is not fully connected to the servers: {detail}"
     if "Origin mismatch" in detail:
         return f"Agent {agent} is bound to another server than the configured one: {detail}"

@@ -1,11 +1,12 @@
 #!/bin/sh
-# moshi-cockpit installer for macOS on Apple silicon:
+# moshi-cockpit installer for macOS on Apple silicon, and headless (without Herdr) for Linux on x86_64 and aarch64:
 #   curl -fsSL https://github.com/pcas-io/moshi-cockpit/releases/latest/download/install.sh | sh
 # Flags go after `sh -s --`: ... | sh -s -- --moshi https://moshi.example.test/mcp --ocellio https://ocellio.example.test/mcp/
 #
 # This file in the repo is a template. tools/build_release.py renders it for each release with the version
 # and the SHA-256 of everything it downloads, so a release's install.sh installs exactly that release. Both
-# downloads are checked before anything of them is unpacked or run. Herdr comes from herdr.dev, never from here.
+# downloads (the Python pinned for this platform and the app) are checked before anything of them is unpacked or
+# run. Herdr comes from herdr.dev, never from here; a Linux machine needs no Herdr app: Herdr on the Mac drives it.
 # Everything runs inside main(): sh reads the whole script from the pipe before it runs a line of it.
 set -eu
 
@@ -13,8 +14,12 @@ VERSION='@VERSION@'
 PAYLOAD_SHA256='@PAYLOAD_SHA256@'
 RELEASE_URL='@RELEASE_URL@'
 PYTHON_VERSION='@PYTHON_VERSION@'
-PYTHON_URL='@PYTHON_URL@'
-PYTHON_SHA256='@PYTHON_SHA256@'
+PYTHON_URL_MACOS_ARM64='@PYTHON_URL_MACOS_ARM64@'
+PYTHON_SHA256_MACOS_ARM64='@PYTHON_SHA256_MACOS_ARM64@'
+PYTHON_URL_LINUX_X86_64='@PYTHON_URL_LINUX_X86_64@'
+PYTHON_SHA256_LINUX_X86_64='@PYTHON_SHA256_LINUX_X86_64@'
+PYTHON_URL_LINUX_AARCH64='@PYTHON_URL_LINUX_AARCH64@'
+PYTHON_SHA256_LINUX_AARCH64='@PYTHON_SHA256_LINUX_AARCH64@'
 HERDR_APP='@HERDR_APP@'
 CURL_PROTO='@CURL_PROTO@'
 ONE_LINE='curl -fsSL https://github.com/pcas-io/moshi-cockpit/releases/latest/download/install.sh | sh'
@@ -49,8 +54,12 @@ download() {  # URL FILE WHAT
     || fail "download failed ($3). Nothing was installed. Check the connection and run the line again"
 }
 
+sha256() {  # FILE: prints its SHA-256 (and the name)
+  if [ -n "$has_sha256sum" ]; then sha256sum "$1"; else shasum -a 256 "$1"; fi
+}
+
 verify() {  # FILE SHA256 WHAT
-  got=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  got=$(sha256 "$1" | cut -d ' ' -f 1)
   [ "$got" = "$2" ] \
     || fail "checksum mismatch ($3): the download is not what this release published. Nothing was installed"
 }
@@ -69,13 +78,27 @@ main() {
     esac
   done
 
-  [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] \
-    || fail "Windows and Linux follow; this release supports macOS on Apple silicon."
-  for tool in curl shasum tar mktemp; do
-    command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing on this Mac"
+  # The platform picks the pinned Python; only the Mac runs Herdr here, a Linux machine installs headless.
+  case "$(uname -s) $(uname -m)" in
+    "Darwin arm64")
+      PYTHON_URL=$PYTHON_URL_MACOS_ARM64 PYTHON_SHA256=$PYTHON_SHA256_MACOS_ARM64 need_herdr=1 ;;
+    "Linux x86_64")
+      PYTHON_URL=$PYTHON_URL_LINUX_X86_64 PYTHON_SHA256=$PYTHON_SHA256_LINUX_X86_64 need_herdr="" ;;
+    "Linux aarch64" | "Linux arm64")
+      PYTHON_URL=$PYTHON_URL_LINUX_AARCH64 PYTHON_SHA256=$PYTHON_SHA256_LINUX_AARCH64 need_herdr="" ;;
+    *) fail "Windows follows; this release supports macOS on Apple silicon and Linux on x86_64 and aarch64." ;;
+  esac
+  for tool in curl tar mktemp; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing on this machine"
   done
+  has_sha256sum=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    has_sha256sum=1
+  elif ! command -v shasum >/dev/null 2>&1; then
+    fail "sha256sum (or shasum) is missing on this machine"
+  fi
   [ -n "${HOME:-}" ] || fail "HOME is not set"
-  [ -d "$HERDR_APP" ] || fail "Install Herdr from https://herdr.dev first, then run this again."
+  [ -z "$need_herdr" ] || [ -d "$HERDR_APP" ] || fail "Install Herdr from https://herdr.dev first, then run this again."
 
   data="$HOME/.local/share/moshi-cockpit"
   runtime="$data/runtime"
@@ -84,7 +107,7 @@ main() {
   trap 'rm -rf "$tmp"' EXIT
   trap 'exit 1' INT TERM
 
-  # The runtime stays when it is the one this release pins (its hash is written next to it after the check).
+  # The runtime stays when it is the one this release pins (its hash is written next to it once it started).
   need_python=1
   if [ -x "$runtime/python/bin/python3" ] && [ "$(cat "$runtime/.sha256" 2>/dev/null || true)" = "$PYTHON_SHA256" ]; then
     need_python=""
@@ -105,9 +128,10 @@ main() {
     mkdir -p "$runtime"
     rm -rf "$runtime/python" "$runtime/.sha256"
     mv "$tmp/runtime/python" "$runtime/python"
-    printf '%s\n' "$PYTHON_SHA256" > "$runtime/.sha256"
   fi
   "$runtime/python/bin/python3" -I -c 'import ssl' </dev/null || fail "the bundled Python does not start"
+  # Only a runtime that started is kept: on a host without glibc the next run downloads it again.
+  [ -z "$need_python" ] || printf '%s\n' "$PYTHON_SHA256" > "$runtime/.sha256"
 
   mkdir "$tmp/app"
   tar -xzf "$tmp/payload.tar.gz" -C "$tmp/app"

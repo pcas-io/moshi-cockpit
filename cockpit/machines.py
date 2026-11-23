@@ -79,15 +79,21 @@ def run_batch(argv: Sequence[str], timeout: int) -> Tuple[int, str, str]:
     return proc.returncode, out, err
 
 
-def _first_line(text: str) -> str:
+def first_line(text: str) -> str:
     for line in (text or "").splitlines():
         if line.strip():
             return clean(line.strip(), "?", limit=300)
     return ""
 
 
-def _hc(paths: Paths) -> str:
+_first_line = first_line
+
+
+def hc_path(paths: Paths) -> str:
     return str(paths.herdr_core_bin)
+
+
+_hc = hc_path
 
 
 def _herdr_machines(paths: Paths, runner: Runner) -> List[Dict]:
