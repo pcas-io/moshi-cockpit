@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { HERDR_APP, harnessRows } from "../../share/herdr-mods/mesh-agents/harnesses.js";
 import { catalogRows, settle } from "../../share/herdr-mods/mesh-agents/catalog.js";
 import { takeoverFrom } from "../../share/herdr-mods/mesh-agents/rules.js";
-import { sidebarLine } from "../../share/herdr-mods/moshi/list.js";
+import { ownAgents, remoteCommand, sidebarLine } from "../../share/herdr-mods/moshi/list.js";
 
 const CLI = "/Users/x/.local/bin/moshi-cockpit";
 const offer = (name, installed, available = installed, reason = "") => ({ name, installed, available, reason, native_mesh: true });
@@ -101,4 +101,37 @@ test("sidebar line for disconnected and unreachable", () => {
                    { text: "Not connected to moshi", connect: true });
   assert.equal(sidebarLine({ disconnected: false, unreachable: false, needs_connect: false }), null);
   assert.equal(sidebarLine(null), null);
+});
+
+test("remote agents join the sidebar once, with their machine", () => {
+  const argv = ["/bin/sh", "-lc", "x", "sh", "r2"];
+  const rows = ownAgents([{ name: "ok-1", harness: "codex", installed: true }],
+                         [{ name: "r2", presence: "live", working_on: "tests", last_seen_at: "2026-11-18T10:00:00Z" }],
+                         [{ name: "OK-1", harness: "codex", role: "", machine: "devbox", run_argv: ["x"] },
+                          { name: "r2", harness: "claude", role: "Review", machine: "build-1", run_argv: argv },
+                          { name: "R2", harness: "codex", role: "", machine: "devbox", run_argv: ["y"] }]);
+  assert.deepEqual(rows.map((r) => [r.name, r.machine]), [["r2", "build-1"], ["ok-1", null]]);
+  const [r2, ok] = rows;
+  assert.deepEqual(r2, { name: "r2", harness: "claude", role: "Review", installed: true, machine: "build-1",
+                         runArgv: argv, presence: "live", working_on: "tests", last_seen_at: "2026-11-18T10:00:00Z" });
+  assert.equal(ok.machine, null);
+  assert.equal(ok.presence, null);
+  // control characters in a machine name never reach the row; no remote list at all is today's list
+  assert.equal(ownAgents([], [], [{ name: "a", harness: "codex", machine: "dev\u001bbox", run_argv: ["x"] }])[0].machine,
+               "dev box");
+  assert.deepEqual(ownAgents([{ name: "ok-1", harness: "codex" }], []).map((r) => r.machine), [null]);
+});
+
+test("remote start lands in a space on that machine", () => {
+  const argv = ["/bin/sh", "-lc", "x", "sh", "r2"];
+  const a = { name: "r2", machine: "devbox", runArgv: argv };
+  assert.deepEqual(remoteCommand([{ id: "s0", machine: null }, { id: "s1", machine: "devbox" }, { id: "s2", machine: "devbox" }], a),
+                   { command: "tab.new", args: { name: "r2", argv, space: "s1" } });
+  assert.deepEqual(remoteCommand([{ id: "s0", machine: null }, { id: "s3", machine: "build-1" }], a),
+                   { command: "space.new", args: { machine: "devbox", name: "r2", argv } });
+  assert.deepEqual(remoteCommand(undefined, a), { command: "space.new", args: { machine: "devbox", name: "r2", argv } });
+  assert.equal(remoteCommand([], { ...a, machine: "-x" }), null);
+  assert.equal(remoteCommand([], { ...a, machine: null }), null);
+  assert.equal(remoteCommand([], { ...a, runArgv: [] }), null);
+  assert.equal(remoteCommand([], { ...a, runArgv: undefined }), null);
 });

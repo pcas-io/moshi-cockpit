@@ -224,11 +224,13 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
         store = default_store(lambda: "Linux", paths.home)
         tokens = f"the tokens in {store.name}"
         delete = f"delete {short(paths.secrets_file)} (or the moshi-cockpit entries in your keyring)"
+        last = f" and the state folder {short(paths.state)}/"  # no Herdr app on this machine
     else:
         tokens = "the Keychain entries (moshi-… and ocellio-…)"
         delete = "delete the moshi-… and ocellio-… entries in Keychain Access"
+        last = f", the state folder {short(paths.state)}/ and Herdr itself"
     print(f"Kept: your settings in {short(settings)}/ (config.json, agents.json, rules.md), {tokens}, "
-          f"the app in {short(app)}/, the state folder {short(paths.state)}/ and Herdr itself. "
+          f"the app in {short(app)}/{last}. "
           f"Earlier copies of your settings (*.bak-…) stay in {short(settings)}/ too.")
     print(f"To remove them by hand: rm -rf {short(settings)} {short(app)} {short(paths.state)}, {delete}, "
           "and revoke this installation in the moshi dashboard.")

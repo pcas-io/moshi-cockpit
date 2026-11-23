@@ -4,6 +4,7 @@ import dataclasses
 import io
 import json
 import os
+import re
 import unittest
 from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
@@ -332,6 +333,34 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(self.run_headless(), 0)
         self.assertEqual(self.prompts, [connect.OCELLIO_PROMPT_HEADLESS.format(store=self.ctx.keychain.name)])
         self.assertEqual(self.entry(OCELLIO_ENTRY), OCELLIO_TOKEN)
+
+    def test_headless_says_this_installation_and_names_its_store(self):
+        no_herdr = re.compile(r"this Herdr|the Keychain", re.IGNORECASE)
+        self.ctx.keychain.write(*DEVICE_ENTRY, "dk_unbound-device-key-1234")
+        self.assertEqual(self.run_headless(), 0)
+        self.assertIn("Connecting this installation to moshi.", self.said)
+        self.assertIn("This installation's earlier connection is unknown here; connecting it again.", self.said)
+        self.said.clear()
+        del self.fake.entries[OCELLIO_ENTRY]
+        self.answers = [OCELLIO_TOKEN]
+        self.assertEqual(self.run_headless(), 0)
+        self.assertEqual(self.said[0], "This installation is connected to moshi already.")
+        self.assertFalse([line for line in self.said + self.prompts if no_herdr.search(line)])
+        configure(self.ctx.paths)
+        tokens.bind_identity(self.ctx.paths, self.ctx.backup, tokens.DEVICE, "https://other.example/mcp")
+        with self.assertRaises(ValueError) as caught:
+            self.run_headless()
+        self.assertEqual(str(caught.exception),
+                         f"This installation is connected to another moshi. Run moshi-cockpit uninstall or remove the "
+                         f"old connection in {self.ctx.keychain.name}, then connect again.")
+
+    def test_headless_a_forgotten_device_key_says_this_installation(self):
+        self.run_connect()
+        self.moshi.revoke_installation(next(iter(self.moshi.installations)))
+        self.said.clear()
+        newest = lambda _code: self.moshi.approve(list(self.moshi.flows.values())[-1]["user_code"])  # noqa: E731
+        self.assertEqual(self.run_headless(decision=newest), 0)
+        self.assertIn("moshi no longer knows this installation; it is connected as a new one.", self.said)
 
     def test_text_from_moshi_reaches_the_terminal_without_control_characters(self):
         self.run_connect()

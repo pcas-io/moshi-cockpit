@@ -266,7 +266,7 @@ def _action(check: Check) -> str:
 
 def _agent_action(agent: str, detail: str) -> str:
     """Goes by the first kind of finding, in the order agents.findings reports them (its wording)."""
-    if "Keychain entry missing" in detail or "not bound to a server" in detail:
+    if any(words in detail for words in ("Keychain entry missing", "Entry missing in ", "not bound to a server")):
         return f"Agent {agent} is not fully connected to the servers: {detail}"
     if "Origin mismatch" in detail:
         return f"Agent {agent} is bound to another server than the configured one: {detail}"

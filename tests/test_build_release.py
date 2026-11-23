@@ -230,6 +230,24 @@ class InstallerRunTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.server.requests, [f"/release/moshi-cockpit-{VERSION}.tar.gz"])
 
+    def test_a_runtime_that_does_not_start_is_downloaded_again(self):
+        # a musl host, say: the glibc build unpacks but does not start. No marker, so the next run fetches it again.
+        good = self.python
+        self.python = tarball({"python/bin/python3": "#!/bin/sh\nexit 1\n"})
+        self.serve()
+        done = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("the bundled Python does not start", done.stderr)
+        self.assertFalse((self.data / "runtime" / ".sha256").exists())
+        self.assertFalse((self.home / "cockpit-called").exists())
+        self.python = good
+        self.serve()
+        self.server.requests.clear()
+        done = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("/cpython-macos-arm64.tar.gz", self.server.requests)
+        self.assertEqual((self.data / "runtime" / ".sha256").read_text().strip(), sha256(good))
+
     def test_rendered_script_refuses_a_tampered_payload(self):
         self.serve(payload=self.payload + b"x")
         done = self.run_installer()

@@ -22,7 +22,8 @@ against, and [RECIPE.md](RECIPE.md) for the Herdr mod gallery entry.
 
 ## Requirements
 
-- macOS on Apple silicon; remote Linux machines (x86_64, aarch64) headless. Windows follows.
+- macOS on Apple silicon; remote Linux machines (x86_64, aarch64, with glibc: the bundled Python does not run on
+  musl distributions such as Alpine) headless. Windows follows.
 - Herdr, installed first from [herdr.dev](https://herdr.dev). The cockpit never downloads Herdr. The Herdr
   versions this release was tested with are listed in `cockpit/compat.py`; any other version only produces a
   warning in `moshi-cockpit doctor`.
@@ -90,8 +91,9 @@ Start an agent from the sidebar or the menu; the session picker lets you resume 
 **Where** (top of New) chooses this Mac or one of Herdr's machines whose layout Herdr has read. On another
 machine the dialog lists the six harnesses from that machine's inventory. Start opens a new space on that
 machine running the harness; a harness that is installed but not signed in can be started, its first start
-signs in. Missing ones point to the Machines tab. Nothing is created in moshi or in `agents.json` for it: no
-moshi runs on those machines in this release, and "Your agents" stays the moshi agents on this Mac.
+signs in. Missing ones point to the Machines tab. On a Linux machine whose moshi-cockpit is connected (see
+[Linux machines](#linux-machines)), New and From moshi create or load the agent there, with its own moshi
+identity, and start it in a tab there. On any other machine nothing is created in moshi or in `agents.json`.
 
 Each agent's Vibe profile (`config.toml`) is written by the cockpit: hand edits to it are replaced on the next
 `install` and whenever the agent's setup is written again.
@@ -164,7 +166,12 @@ their own moshi identity and you start them from Herdr on the Mac.
    without `sudo`.
 3. **Connect to moshi** in its row. The tab there prints a link and a code; approve it in the browser on your Mac
    or phone. The installation is named after the machine.
-4. **+ Agent → New** with **Where** set to that machine creates an agent there.
+4. **+ Agent → New** with **Where** set to that machine creates an agent there; **From moshi** loads one there.
+5. **Your agents** in the sidebar lists the agents of that machine with "on <machine>" and their moshi presence.
+   A click focuses the agent's tab, or starts it in a tab on that machine; if it runs elsewhere, the tab asks
+   before it takes it over. An agent whose name is also on this Mac shows once, as the local row. The list is
+   read from the cache of the last check of that machine (Machines tab, Refresh, or picking it in New or From
+   moshi); nothing polls the machine.
 
 Tokens on a Linux machine go to the Secret Service (libsecret) when it works, otherwise to
 `~/.config/moshi-cockpit/secrets.json` with mode 0600; `moshi-cockpit doctor` there names the store. See

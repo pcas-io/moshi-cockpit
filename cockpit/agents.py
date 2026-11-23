@@ -43,15 +43,17 @@ def setup(ctx: AgentContext, agent: Agent) -> List[str]:
     harness = HARNESSES[agent.harness]
     missing = harness.missing_tokens(hctx, agent)
     if missing:
-        raise ValueError(f"{agent.name}: Keychain entries missing ({', '.join(missing)}): {CONNECT_HINT}")
+        where = f"entries missing in {ctx.keychain.name}" if ctx.paths.headless else "Keychain entries missing"
+        raise ValueError(f"{agent.name}: {where} ({', '.join(missing)}): {CONNECT_HINT}")
     return harness.setup(hctx, agent)
 
 
 def findings(ctx: AgentContext, agent: Agent) -> List[str]:
-    """doctor's wording; doctor._agent_action matches on it."""
+    """doctor's wording; doctor._agent_action matches on it. A headless machine names its own store."""
     hctx = harness_ctx(ctx)
     harness = HARNESSES[agent.harness]
-    found = [f"Keychain entry missing: {svc}" for svc in harness.missing_tokens(hctx, agent)]
+    missing = f"Entry missing in {ctx.keychain.name}" if ctx.paths.headless else "Keychain entry missing"
+    found = [f"{missing}: {svc}" for svc in harness.missing_tokens(hctx, agent)]
     for server in harness.origin_mismatches(hctx, agent):
         if agent.bound.get(server):
             found.append(f"Origin mismatch {server}: token bound to {agent.bound[server]}, the config points to "

@@ -106,7 +106,8 @@ address and the code for you to open yourself.
 The release installer carries the SHA-256 of the cockpit package and of the pinned Python build it
 downloads. Downloads are HTTPS only (`--proto =https`, TLS 1.2 or newer). Both files are checked before
 anything is unpacked or run; a mismatch stops the installer before it changes anything. The runtime is reused
-only when the hash stored next to it matches. Herdr is never downloaded by the cockpit: you install it from
+only when the hash stored next to it matches; that hash is written only after the unpacked Python started, so
+a runtime that cannot run here (a Linux host without glibc) is downloaded again next time. Herdr is never downloaded by the cockpit: you install it from
 its vendor first. On a remote Linux machine, Install in the Machines tab fetches the install.sh of this Mac's
 version (its pinned release tag) over HTTPS only; that install.sh then verifies Python and the payload by
 SHA-256 as above.
@@ -164,8 +165,15 @@ yes. The cockpit adds no installer a vendor does not publish.
   sees, passes or stores it. The user comes from Herdr's machine list, must pass the name rule above, and is
   an argument of a fixed script, never shell text. Log in (`hc machine login`) likewise runs in a visible tab
   on this Mac, where hc asks.
-- **Remote machines and moshi.** This release puts no moshi identity, token or agent on a remote machine.
-  A harness started there through "Where" runs without moshi.
+- **Remote machines and moshi.** Agents on a Linux machine have their own moshi identity: the machine's
+  moshi-cockpit is an installation of its own, connected with its own approval. Its device key, registration
+  token and the agents' tokens stay on that machine, in the store `moshi-cockpit doctor` there names (see
+  [Tokens on Linux machines](#tokens-on-linux-machines)); the Mac holds none of them. The Mac runs the
+  machine's own moshi-cockpit through `hc exec`, with names, roles and skills as arguments of a fixed script,
+  never as shell text, and reads back only exit codes, one-line notes, the version there, whether it is
+  connected, and each agent's name, harness and role. Those it caches per machine in
+  `~/.local/state/moshi-cockpit/remote-cockpit.json` (mode 0600, no token), which "Your agents" reads. A
+  harness started through "Where" on a machine without a connected moshi-cockpit runs without moshi.
 
 ## Pins and groups
 

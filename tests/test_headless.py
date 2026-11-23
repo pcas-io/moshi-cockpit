@@ -13,9 +13,10 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import cockpit
-from cockpit import cli, compat, connect, doctor, installer
+from cockpit import agents, cli, compat, connect, doctor, installer, registry
 from cockpit.agents import AgentContext
 from cockpit.backup import BackupStore
 from cockpit.paths import Paths
@@ -71,6 +72,8 @@ class UninstallTest(unittest.TestCase):
         self.assertIn("secrets.json", text)
         self.assertIn("(or the moshi-cockpit entries in your keyring)", text)
         self.assertNotIn("Keychain", text)
+        self.assertNotIn("Herdr itself", text)  # a headless machine has no Herdr app to keep
+        self.assertIn("and the state folder ~/.local/state/moshi-cockpit/. ", text)
 
 
 DEVICE_KEY = "dk_device_key_1234567890"
@@ -126,6 +129,20 @@ class DoctorTest(unittest.TestCase):
         self.assertIn("endpoint-moshi", by_name)  # the checks after the store still ran
         self.assertEqual(doctor.exit_code(results), 1)
         self.assertEqual(sum("is a symlink" in r.detail for r in results), 1)
+
+    def test_agent_findings_name_the_store_instead_of_the_keychain(self):
+        configure(self.paths, servers={"moshi": MOSHI}, agents=[{"name": "codex", "harness": "codex"}])
+        bind_non_agent(self.paths)
+        ctx = AgentContext(paths=self.paths, backup=BackupStore(self.paths.state), keychain=self.store)
+        with mock.patch("cockpit.harnesses.base.Harness.installed", return_value=True):
+            found = agents.findings(ctx, registry.find(self.paths, "codex"))
+            results = doctor.run(self.doctor())
+            with self.assertRaises(ValueError) as caught:
+                agents.setup(ctx, registry.find(self.paths, "codex"))
+        self.assertEqual(found, [f"Entry missing in {self.store.name}: moshi-codex"])
+        self.assertIn("not fully connected", doctor.quiet(results))
+        self.assertIn(f"entries missing in {self.store.name} (moshi-codex)", str(caught.exception))
+        self.assertNotIn("Keychain", doctor.quiet(results) + str(caught.exception))
 
     def test_missing_herdr_core_only_warns(self):
         results = doctor.run(self.doctor(core=None))

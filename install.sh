@@ -107,7 +107,7 @@ main() {
   trap 'rm -rf "$tmp"' EXIT
   trap 'exit 1' INT TERM
 
-  # The runtime stays when it is the one this release pins (its hash is written next to it after the check).
+  # The runtime stays when it is the one this release pins (its hash is written next to it once it started).
   need_python=1
   if [ -x "$runtime/python/bin/python3" ] && [ "$(cat "$runtime/.sha256" 2>/dev/null || true)" = "$PYTHON_SHA256" ]; then
     need_python=""
@@ -128,9 +128,10 @@ main() {
     mkdir -p "$runtime"
     rm -rf "$runtime/python" "$runtime/.sha256"
     mv "$tmp/runtime/python" "$runtime/python"
-    printf '%s\n' "$PYTHON_SHA256" > "$runtime/.sha256"
   fi
   "$runtime/python/bin/python3" -I -c 'import ssl' </dev/null || fail "the bundled Python does not start"
+  # Only a runtime that started is kept: on a host without glibc the next run downloads it again.
+  [ -z "$need_python" ] || printf '%s\n' "$PYTHON_SHA256" > "$runtime/.sha256"
 
   mkdir "$tmp/app"
   tar -xzf "$tmp/payload.tar.gz" -C "$tmp/app"
