@@ -79,6 +79,12 @@ test("catalog rows show where an agent runs", () => {
   assert.equal(catalogRows([{ name: "x\u0007", harness: "codex", active_installation: "A\u001bB", loadable: true }])[0].where,
                "Running on A B");
   assert.deepEqual(catalogRows(undefined), []);
+  // From moshi on a remote machine: the note names that machine, the reason is the remote's own ("per machine")
+  const remote = catalogRows([
+    { name: "writer", harness: "vibe", active_installation: null, harness_installed: false, loadable: true, reason: "" },
+    { name: "two", harness: "agy", active_installation: null, harness_installed: true, loadable: false,
+      reason: "one agy agent per machine, taken by 'a1'" }], "devbox");
+  assert.deepEqual(remote.map((r) => r.note), ["vibe is not installed on devbox", "one agy agent per machine, taken by 'a1'"]);
 });
 
 test("start asks before it takes over an agent that runs elsewhere", () => {
@@ -103,13 +109,16 @@ test("sidebar line for disconnected and unreachable", () => {
   assert.equal(sidebarLine(null), null);
 });
 
+const LISTED = [{ name: null, layout: "ready" }, { name: "devbox", layout: "ready" }, { name: "build-1", layout: "loading" }];
+
 test("remote agents join the sidebar once, with their machine", () => {
   const argv = ["/bin/sh", "-lc", "x", "sh", "r2"];
   const rows = ownAgents([{ name: "ok-1", harness: "codex", installed: true }],
                          [{ name: "r2", presence: "live", working_on: "tests", last_seen_at: "2026-11-18T10:00:00Z" }],
                          [{ name: "OK-1", harness: "codex", role: "", machine: "devbox", run_argv: ["x"] },
                           { name: "r2", harness: "claude", role: "Review", machine: "build-1", run_argv: argv },
-                          { name: "R2", harness: "codex", role: "", machine: "devbox", run_argv: ["y"] }]);
+                          { name: "R2", harness: "codex", role: "", machine: "devbox", run_argv: ["y"] }],
+                         LISTED);
   assert.deepEqual(rows.map((r) => [r.name, r.machine]), [["r2", "build-1"], ["ok-1", null]]);
   const [r2, ok] = rows;
   assert.deepEqual(r2, { name: "r2", harness: "claude", role: "Review", installed: true, machine: "build-1",
@@ -117,9 +126,20 @@ test("remote agents join the sidebar once, with their machine", () => {
   assert.equal(ok.machine, null);
   assert.equal(ok.presence, null);
   // control characters in a machine name never reach the row; no remote list at all is today's list
-  assert.equal(ownAgents([], [], [{ name: "a", harness: "codex", machine: "dev\u001bbox", run_argv: ["x"] }])[0].machine,
-               "dev box");
+  assert.equal(ownAgents([], [], [{ name: "a", harness: "codex", machine: "dev\u001bbox", run_argv: ["x"] }],
+                         [{ name: "dev\u001bbox", layout: "ready" }])[0].machine, "dev box");
   assert.deepEqual(ownAgents([{ name: "ok-1", harness: "codex" }], []).map((r) => r.machine), [null]);
+});
+
+test("remote agents show only for machines Herdr still lists", () => {
+  const remote = [{ name: "gone-1", harness: "codex", machine: "old-box", run_argv: ["x"] },
+                  { name: "r2", harness: "codex", machine: "old-box", run_argv: ["x"] },
+                  { name: "R2", harness: "claude", machine: "devbox", run_argv: ["y"] }];
+  // old-box was removed from Herdr: its rows go, and its r2 does not hide devbox's
+  assert.deepEqual(ownAgents([], [], remote, LISTED).map((r) => [r.name, r.machine]), [["R2", "devbox"]]);
+  assert.deepEqual(ownAgents([], [], remote, [{ name: null, layout: "ready" }]), []);  // This Mac only
+  assert.deepEqual(ownAgents([], [], remote), []);
+  assert.deepEqual(ownAgents([], [], remote, undefined), []);
 });
 
 test("remote start lands in a space on that machine", () => {

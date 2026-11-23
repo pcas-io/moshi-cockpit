@@ -20,7 +20,7 @@ test("cockpit args", () => {
 test("exec waits longer than the CLI guards", () => {
   // above the CLI's own guards (45 s for the probe, 120 s for an agent call), so a slow machine ends in its answer
   assert.ok(COCKPIT_EXEC.timeout > 45000);
-  assert.ok(AGENT_EXEC.timeout > 120000);
+  assert.ok(AGENT_EXEC.timeout > 120000 + 45000);  // add or load, then the re-probe
   let cockpitCalls = 0;
   let agentCalls = 0;
   for (const file of ["machines-view.js", "main.js"]) {
@@ -56,6 +56,13 @@ test("cockpit link per state", () => {
   assert.equal(cockpitLink(undefined), null);
   assert.deepEqual(cockpitLink(answer("error", { state_text: "devbox did not answer:\u001b[31m timeout" })),
                    { text: "moshi: ?", tooltip: "devbox did not answer: [31m timeout", action: null });
+  // an unreadable version is the error state: "moshi: ?" with the reason, never Update
+  const unreadable = "moshi-cockpit there reports no version this Mac can read, so it is not offered an update; run x";
+  assert.deepEqual(cockpitLink(answer("error", { state_text: unreadable, update: true, install_argv: INSTALL })),
+                   { text: "moshi: ?", tooltip: unreadable, action: null });
+  // a newer moshi-cockpit there (the CLI says update: false) shows ✓ as usual, never a downgrade
+  assert.deepEqual(cockpitLink(answer("connected", { version: "99.0.0", agents: two, connect_argv: CONNECT })),
+                   { text: "moshi ✓ 2", tooltip: "text of connected", action: null });
 });
 
 test("moshi ready only when connected and current", () => {
@@ -67,14 +74,17 @@ test("moshi ready only when connected and current", () => {
 
 test("moshi chips", () => {
   const chips = moshiChips([{ name: "codex", installed: true, available: true },
-                            { name: "agy", installed: true, available: false, reason: "one agy agent per machine" },
-                            { name: "vibe", installed: false }]);
+                            { name: "agy", installed: true, available: false, reason: "one agent per machine, taken by 'a1'" },
+                            { name: "vibe", installed: false }], "devbox");
   assert.deepEqual(chips, [
     { name: "codex", label: "Codex", selectable: true, note: "" },
-    { name: "agy", label: "Antigravity", selectable: false, note: "one agy agent per machine" },
-    { name: "vibe", label: "Vibe", selectable: false, note: "not installed on that machine" },
+    { name: "agy", label: "Antigravity", selectable: false, note: "Antigravity: one agent per machine, taken by 'a1'" },
+    { name: "vibe", label: "Vibe", selectable: false, note: "Vibe is not installed on devbox" },
   ]);
-  assert.deepEqual(moshiChips(undefined), []);
+  assert.deepEqual(moshiChips(undefined, "devbox"), []);
+  assert.equal(moshiChips([{ name: "vibe", installed: false }], "dev\u001bbox")[0].note, "Vibe is not installed on dev box");
+  // the form shows the notes as they are, so each one names its harness
+  assert.match(source("main.js"), /notes\.map\(\(c\) => c\.note\)\.join\(" \\u00b7 "\)/);
 });
 
 test("remote add args keep the typed text as one argument", () => {

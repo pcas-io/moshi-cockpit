@@ -235,23 +235,33 @@ class SecretToolStore:
         except OSError as error:
             raise KeychainError(f"Could not run secret-tool for '{service}' ({error.strerror}). {NO_ANSWER}") from None
 
-    def exists(self, service: str, account: str) -> bool:
+    def _lookup(self, service: str, account: str) -> str:
+        """The entry's secret, "" when secret-tool says there is none (exit 1, nothing on stderr). Any other
+        failure is secret-tool reporting a problem (locked keyring, no D-Bus session): a KeychainError, never
+        "missing". The message never carries stdout or stderr."""
         result = self._call("lookup", service, account)
-        return result.returncode == 0 and bool((result.stdout or "").strip())
+        if result.returncode == 0:
+            return (result.stdout or "").strip()
+        if _missing(result):
+            return ""
+        raise KeychainError(f"Could not read Secret Service entry '{service}'. {NO_ANSWER}")
+
+    def exists(self, service: str, account: str) -> bool:
+        return bool(self._lookup(service, account))
 
     def read(self, service: str, account: str) -> str:
-        result = self._call("lookup", service, account)
-        secret = (result.stdout or "").strip() if result.returncode == 0 else ""
+        secret = self._lookup(service, account)
         if not secret:
-            raise KeychainError(f"Secret Service entry '{service}' (account '{account}') is missing or locked")
+            raise KeychainError(f"Secret Service entry '{service}' (account '{account}') is missing")
         return secret
 
     def write(self, service: str, account: str, secret: str, strict: bool = False) -> None:
         """Stores or replaces an entry. `strict` is accepted and ignored: the Secret Service has no per-read ACL."""
         validate_token(secret)
         check_names(service, account)
-        if self._call("store", service, account, stdin=secret).returncode != 0:
-            raise KeychainError(f"Could not write Secret Service entry '{service}'. {NO_ANSWER}")
+        result = self._call("store", service, account, stdin=secret)
+        if result.returncode != 0:
+            raise KeychainError(f"Could not write Secret Service entry '{service}'. {_failure(result)}")
         if self._marker is not None and not os.path.lexists(self._marker):
             try:
                 _ensure_dir(self._marker.parent)
@@ -260,9 +270,23 @@ class SecretToolStore:
             _write_atomic(self._marker, MARKER_TEXT)
 
     def delete(self, service: str, account: str) -> None:
+        """Removes an entry; one that is not there (exit 1, nothing on stderr) is fine."""
         check_names(service, account)
-        if self._call("clear", service, account).returncode != 0:
-            raise KeychainError(f"Could not delete Secret Service entry '{service}'")
+        result = self._call("clear", service, account)
+        if result.returncode != 0 and not _missing(result):
+            raise KeychainError(f"Could not delete Secret Service entry '{service}'. {_failure(result)}")
+
+
+def _missing(result: "subprocess.CompletedProcess[str]") -> bool:
+    """secret-tool's "no such entry": exit 1 without a message. With a message on stderr it failed instead."""
+    return result.returncode == 1 and not (result.stderr or "").strip()
+
+
+def _failure(result: "subprocess.CompletedProcess[str]") -> str:
+    """Why a store or clear failed, without secret-tool's own output (it is never echoed)."""
+    if (result.stderr or "").strip():
+        return NO_ANSWER
+    return f"secret-tool ended with exit code {result.returncode}."
 
 
 def secret_tool_usable(runner: Runner, which: Which) -> bool:

@@ -242,7 +242,7 @@ export default class MeshAgents extends View {
       ]);
       let answer = null;
       try { answer = JSON.parse(r.stdout); } catch { /* remoteSettle reads stderr then */ }
-      if (r.code === 0 && Array.isArray(answer?.agents)) entry.rows = catalogRows(answer.agents);
+      if (r.code === 0 && Array.isArray(answer?.agents)) entry.rows = catalogRows(answer.agents, name);
       else {
         const next = r.code === 0 ? { action: "stay", problem: "moshi-cockpit gave no list" } : remoteSettle(r);
         entry.problem = next.problem;
@@ -305,7 +305,7 @@ export default class MeshAgents extends View {
     const state = this.remote[machine].cockpit;
     const form = { name: this.name.value().trim(), harness: this.remoteHarness, role: roleText(this.role.value()),
                    skill: state.ocellio ? this.skill.value().trim() : "" };
-    const chip = moshiChips(state.harnesses).find((c) => c.name === form.harness && c.selectable);
+    const chip = moshiChips(state.harnesses, machine).find((c) => c.name === form.harness && c.selectable);
     this.problem = checkName(form.name, state.agents) ?? (chip ? null : "Choose a harness") ?? checkSkill(form.skill);
     this.remoteConnect = null;
     if (this.problem) { cx.notify(); return; }
@@ -490,7 +490,7 @@ export default class MeshAgents extends View {
   }
 
   moshiForm(t, machine, state) {
-    const chips = moshiChips(state.harnesses);
+    const chips = moshiChips(state.harnesses, machine);
     const notes = chips.filter((c) => c.note);
     return v_flex().w_full().gap(10)
       .child(this.input(t, this.name))
@@ -499,7 +499,7 @@ export default class MeshAgents extends View {
           (_e, cx) => { this.remoteHarness = c.name; this.problem = null; cx.notify(); },
           { on: this.remoteHarness === c.name, enabled: c.selectable }))))
       .when(notes.length > 0, (el) => el.child(div().text_size(11).text_color(t.dim)
-        .child(notes.map((c) => `${c.label}: ${c.note}`).join(" \u00b7 "))))
+        .child(notes.map((c) => c.note).join(" \u00b7 "))))
       .child(this.input(t, this.role))
       .when(!!state.ocellio, (el) => el.child(this.input(t, this.skill)))
       .child(h_flex().gap(8).items_center()

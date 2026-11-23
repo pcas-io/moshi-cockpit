@@ -123,7 +123,10 @@ Clicking a cell does what its symbol says (its tooltip names the state):
 
 A machine that is not connected, or that Herdr is still connecting to, shows a short note in its row instead
 of the cells. The **×** at a machine's row end removes it from Herdr (`hc machine rm`) after you confirm; its
-terminals keep running there, and a saved target stays as a chip to add it again.
+terminals keep running there, and a saved target stays as a chip to add it again. On a Linux machine, its
+moshi-cockpit installation and tokens stay in place too, and its agents leave "Your agents": to cut it off,
+revoke that installation in the moshi dashboard, or run `moshi-cockpit uninstall` there first (which leaves the
+tokens as well; see [Uninstall](#uninstall)).
 
 - **Warnings.** A machine warning in the spaces list (⚠, or a login it needs) opens this tab with that machine's row highlighted.
 - **Log in.** A machine that needs a login says so in its row; **Log in** opens a tab on this Mac with `hc machine login`, where hc asks for the password or code; the row's **Refresh** checks it again afterwards.
@@ -161,17 +164,26 @@ A Linux machine that Herdr on your Mac reaches runs moshi-cockpit headless: no H
 their own moshi identity and you start them from Herdr on the Mac.
 
 1. Add the machine under **Machines** (see above).
-2. **Install moshi-cockpit** in its row. A tab on that machine runs the same install line as on the Mac; it picks
-   the pinned Python for x86_64 or aarch64, checks every download's SHA-256 and puts everything under `~/.local`,
-   without `sudo`.
+2. **Install moshi-cockpit** in its row ("moshi: Install"). A tab on that machine runs the install.sh of this
+   Mac's version with this Mac's server addresses; it picks the pinned Python for x86_64 or aarch64, checks every
+   download's SHA-256 and puts everything under `~/.local`, without `sudo`. **Update** ("moshi: Update") appears
+   only when the version there is older than this Mac's; it installs this Mac's version and keeps the machine's
+   servers (the tab shows them, Enter keeps them). A newer version there is left as it is, and a version the
+   Mac cannot read shows "moshi: ?" with the reason in its tooltip.
 3. **Connect to moshi** in its row. The tab there prints a link and a code; approve it in the browser on your Mac
    or phone. The installation is named after the machine.
 4. **+ Agent → New** with **Where** set to that machine creates an agent there; **From moshi** loads one there.
-5. **Your agents** in the sidebar lists the agents of that machine with "on <machine>" and their moshi presence.
-   A click focuses the agent's tab, or starts it in a tab on that machine; if it runs elsewhere, the tab asks
-   before it takes it over. An agent whose name is also on this Mac shows once, as the local row. The list is
-   read from the cache of the last check of that machine (Machines tab, Refresh, or picking it in New or From
-   moshi); nothing polls the machine.
+5. **Your agents** in the sidebar lists the agents of that machine with their moshi presence; the row's tooltip
+   names the machine ("on <machine>"). A click focuses the agent's tab, or starts it in a tab on that machine; if
+   it runs elsewhere, the tab asks before it takes it over. An agent whose name is also on this Mac shows once,
+   as the local row. The list is read from the cache of the last check of that machine (Machines tab, Refresh,
+   picking it in New or From moshi, or right after an agent was created or loaded there); nothing polls the
+   machine. Only machines Herdr still lists show their agents.
+
+To take an agent to a machine, or back to one after another installation took it over, open **+ Agent → From
+moshi** with that machine as **Where** and load it: it starts in a tab there and asks before it takes it over.
+From moshi lists only agents that machine does not have yet; one it has starts from its row in Your agents, or
+with `moshi-cockpit run <name>` in a tab there when its name is also on this Mac (the tab asks the same).
 
 Tokens on a Linux machine go to the Secret Service (libsecret) when it works, otherwise to
 `~/.config/moshi-cockpit/secrets.json` with mode 0600; `moshi-cockpit doctor` there names the store. See
@@ -234,6 +246,8 @@ and activation is skipped.
 | `machine add ALIAS` | Add an ssh host (a `Host` from `~/.ssh/config`, `user@host` or `user@host:port`) to Herdr with `hc machine add`, attached to your terminal, then show its inventory. |
 | `machine add TARGET --batch [--json]` | The same without a terminal (the Machines tab): saves the target, installs herdr-core there without asking and answers with the new machine's inventory, or that it needs a password or a host key. |
 | `machine remove NAME [--json]` | Remove a machine from Herdr with `hc machine rm`; its terminals keep running there. Your saved hosts stay. |
+| `machine cockpit [--on NAME] [--refresh] [--json]` | moshi-cockpit on a Linux machine: not installed, not connected, or connected with its agents; the Install, Update and Connect commands the Machines tab opens there. Cached for a minute. |
+| `machine agent --on NAME add AGENT --harness H [--role=R] [--skill=S] [--json]` / `load AGENT` / `catalog` | Create, load or list moshi agents on that Linux machine; their tokens stay there. Answers with the command that starts the agent in a tab on that machine. |
 | `machine hosts add\|remove TARGET` | Add a target to your saved hosts, or forget it. |
 | `machine hostkey TARGET [--json]` | Whether the host's key is in `~/.ssh/known_hosts`, else the keys it offers with their SHA256 fingerprints; a host with ssh settings the dialog doesn't handle gets `needs: "tab"` instead. |
 | `machine trust TARGET --type TYPE --fingerprint SHA256:… [--json]` | Check the host's key again and add it to `~/.ssh/known_hosts` only if type and fingerprint still match. |

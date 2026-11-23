@@ -20,19 +20,24 @@ TOKEN = "tok_abcdefgh1"
 class FakeSecretTool:
     """Mimics `secret-tool` store/lookup/clear on its attribute list. Records (argv, input, timeout) of every call
     so tests can assert no secret hit argv. With hang=True every call times out, like a locked keyring that
-    waits for a prompt nobody can answer; hang_on names only the commands that do."""
+    waits for a prompt nobody can answer; hang_on names only the commands that do. `fail` maps a command to the
+    (exit code, stderr) it ends with instead, like a locked keyring or a missing D-Bus session."""
 
-    def __init__(self, hang: bool = False, hang_on=()) -> None:
+    def __init__(self, hang: bool = False, hang_on=(), fail=None) -> None:
         self.items: Dict[Tuple[str, ...], str] = {}
         self.calls: List[Tuple[List[str], Optional[str], Optional[float]]] = []
         self.hang = hang
         self.hang_on = set(hang_on)
+        self.fail = dict(fail or {})
 
     def __call__(self, args, input=None, timeout=None, **_kwargs):
         self.calls.append((list(args), input, timeout))
         if self.hang or args[1] in self.hang_on:
             raise subprocess.TimeoutExpired(args, timeout)
         command = args[1]
+        if command in self.fail:
+            code, err = self.fail[command]
+            return subprocess.CompletedProcess(args, code, "", err)
         if command == "store":
             self.items[tuple(args[4:])] = input
             return subprocess.CompletedProcess(args, 0, "", "")
@@ -271,6 +276,46 @@ class SecretToolStoreTest(unittest.TestCase):
         self.assertIn("locked", str(caught.exception))
         self.assertTrue(fake.calls)
         self.assertTrue(all(timeout == SECRET_TOOL_TIMEOUT for _, _, timeout in fake.calls))
+
+    def test_a_secret_tool_error_is_never_read_as_missing(self):
+        locked = "secret-tool: Cannot create an item in a locked collection\n"
+        for code in (1, 2):
+            fake = FakeSecretTool(fail={"lookup": (code, locked), "store": (code, locked), "clear": (code, locked)})
+            fake.items[tuple(self.ATTRS)] = TOKEN
+            store = SecretToolStore(fake)
+            for call in (lambda: store.read("moshi-device", "device"), lambda: store.exists("moshi-device", "device"),
+                         lambda: store.write("moshi-device", "device", TOKEN),
+                         lambda: store.delete("moshi-device", "device")):
+                with self.assertRaises(KeychainError) as caught:
+                    call()
+                self.assertIn(NO_ANSWER, str(caught.exception))
+                self.assertIn("moshi-device", str(caught.exception))
+                self.assertNotIn(TOKEN, str(caught.exception))
+                self.assertNotIn("locked collection", str(caught.exception))  # secret-tool's output is not echoed
+
+    def test_exit_1_without_a_message_is_a_missing_entry(self):
+        fake = FakeSecretTool()  # its lookup of an unknown entry ends with 1 and nothing on stderr
+        store = SecretToolStore(fake)
+        self.assertFalse(store.exists("moshi-device", "device"))
+        with self.assertRaises(KeychainError) as caught:
+            store.read("moshi-device", "device")
+        self.assertIn("is missing", str(caught.exception))
+        self.assertNotIn(NO_ANSWER, str(caught.exception))
+        SecretToolStore(FakeSecretTool(fail={"clear": (1, "")})).delete("moshi-device", "device")  # nothing to clear
+        for code in (2, 139):  # another exit code without a message: a failure, never "missing"
+            fake = FakeSecretTool(fail={"lookup": (code, ""), "store": (code, ""), "clear": (code, "")})
+            with self.assertRaises(KeychainError) as caught:
+                SecretToolStore(fake).exists("moshi-device", "device")
+            self.assertIn(NO_ANSWER, str(caught.exception))
+            with self.assertRaises(KeychainError) as caught:
+                SecretToolStore(fake).write("moshi-device", "device", TOKEN)
+            self.assertIn(f"exit code {code}", str(caught.exception))
+            self.assertNotIn(TOKEN, str(caught.exception))
+            with self.assertRaises(KeychainError):
+                SecretToolStore(fake).delete("moshi-device", "device")
+        with self.assertRaises(KeychainError) as caught:
+            SecretToolStore(FakeSecretTool(fail={"store": (1, "")})).write("moshi-device", "device", TOKEN)
+        self.assertIn("exit code 1", str(caught.exception))
 
     def test_rejects_a_bad_token_before_calling(self):
         fake = FakeSecretTool()

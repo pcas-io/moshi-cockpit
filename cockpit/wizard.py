@@ -33,8 +33,9 @@ def harness_choices(paths: Paths) -> List[str]:
 
 
 def unavailable(paths: Paths) -> List[str]:
-    """Why a harness is not offered, one line each."""
+    """Why a harness is not offered, one line each ("per machine" on a Linux machine, "per Mac" here)."""
     agents = load_agents(paths, enforce=False)
+    here = "machine" if paths.headless else "Mac"
     lines = []
     for name, h in HARNESSES.items():
         if h.no_own_agents:
@@ -45,7 +46,7 @@ def unavailable(paths: Paths) -> List[str]:
             continue
         taken = [a.name for a in agents if a.harness == name]
         if h.single_instance and taken:
-            lines.append(f"{name}: one agent per Mac, taken by '{taken[0]}'")
+            lines.append(f"{name}: one agent per {here}, taken by '{taken[0]}'")
     return lines
 
 

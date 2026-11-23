@@ -1,11 +1,12 @@
 // "Your agents" in the sidebar, below herdr's Spaces and Agents: the person's own agents
 // with their moshi presence. Reads only `moshi-cockpit status --json`: the token stays in the keychain behind the
 // CLI, this mod never sees it. Starting, creating and removing live in the mesh-agents dialog. The agents of Linux
-// machines ("on <machine>") come in the same answer, from the CLI's cache of those machines: no hc call, no new timer.
+// machines ("on <machine>") come in the same answer, from the CLI's cache of those machines: no hc call, no new timer;
+// only those of machines Herdr still lists (machines()) show.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, exec, home, layout, notify, openOverlay, panes, run, setShared, spaces, theme } from "herdr";
+import { agents, exec, home, layout, machines, notify, openOverlay, panes, run, setShared, spaces, theme } from "herdr";
 import { ago, btn, cockpit, dotColor, plain } from "./util.js";
 import { ownAgents, remoteCommand, runningTerminal, sidebarLine } from "./list.js";
 
@@ -134,7 +135,7 @@ export default class Moshi extends View {
 
   render() {
     const t = theme();
-    const list = ownAgents(this.data?.local, this.data?.agents, this.data?.remote);
+    const list = ownAgents(this.data?.local, this.data?.agents, this.data?.remote, machines());
     const collapsed = narrow();
     const line = sidebarLine(this.data);
     return v_flex().id("own-agents").size_full().min_h(0).bg(t.chrome).border_t(1).border_color(t.border).text_size(13)

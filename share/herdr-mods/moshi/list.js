@@ -14,7 +14,8 @@ const passable = (text) => typeof text === "string" && /^[A-Za-z0-9][A-Za-z0-9._
 // one: a harness that reaches moshi through the account would show the account's presence as its own.
 // `remote`: the agents of Linux machines (status --json, from the cache), each with its own moshi identity. A name
 // that is also local, or on an earlier machine, shows once: the same identity, and the takeover decides where it runs.
-export function ownAgents(local, mesh, remote = []) {
+// `listed`: Herdr's machines (machines()); a remote agent shows only while Herdr still lists its machine.
+export function ownAgents(local, mesh, remote = [], listed = []) {
   const byName = new Map((mesh ?? []).map((a) => [String(a.name ?? "").toLowerCase(), a]));
   const presence = (found) => ({ presence: found?.presence ?? null, working_on: found?.working_on ?? "",
                                  last_seen_at: found?.last_seen_at ?? "" });
@@ -22,9 +23,10 @@ export function ownAgents(local, mesh, remote = []) {
     name: a.name, harness: a.harness, role: a.role ?? "", installed: !!a.installed, machine: null,
     ...presence(a.has_moshi_token ? byName.get(String(a.name).toLowerCase()) : undefined) }));
   const seen = new Set(rows.map((a) => String(a.name).toLowerCase()));
+  const machines = new Set((listed ?? []).map((m) => m?.name).filter((name) => typeof name === "string" && name));
   for (const a of remote ?? []) {
     const key = String(a?.name ?? "").toLowerCase();
-    if (!key || seen.has(key)) continue;
+    if (!key || seen.has(key) || !machines.has(a.machine)) continue;
     seen.add(key);
     rows.push({ name: a.name, harness: a.harness, role: a.role ?? "", installed: true, machine: plain(a.machine, 254),
                 runArgv: a.run_argv, ...presence(byName.get(key)) });

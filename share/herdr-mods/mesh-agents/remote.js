@@ -8,7 +8,7 @@ import { NAMES } from "./harnesses.js";
 // exec's options: longer than the CLI's own guards (45 s for the state, 120 s for an agent call), so a slow
 // machine ends in the CLI's "<machine> did not answer: …", not in exec's timeout.
 export const COCKPIT_EXEC = { timeout: 60000 };
-export const AGENT_EXEC = { timeout: 150000 };
+export const AGENT_EXEC = { timeout: 180000 };  // the CLI: add/load up to 120 s, then one re-probe up to 45 s
 
 export function cockpitArgs(machine, refresh) {
   return ["machine", "cockpit", "--on", machine, ...(refresh ? ["--refresh"] : []), "--json"];
@@ -17,13 +17,15 @@ export function cockpitArgs(machine, refresh) {
 const argvOf = (argv) => (Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === "string") ? argv : null);
 
 // The link beside a machine's Refresh: what moshi-cockpit there needs next (install, update, connect) or how many
-// agents it has; nothing for another OS. The state text is its tooltip.
+// agents it has; nothing for another OS. The state text is its tooltip. Update only for an installed one the CLI
+// found older than this Mac's (a newer one shows ✓ as usual); an unreadable version is the error state, "moshi: ?".
 export function cockpitLink(c) {
   if (!c || typeof c !== "object" || c.state === "unsupported") return null;
   const count = Array.isArray(c.agents) ? c.agents.length : 0;
-  const text = c.state === "missing" ? "moshi: Install" : c.update ? "moshi: Update" : c.state === "unconnected"
+  const update = !!c.update && (c.state === "connected" || c.state === "unconnected");
+  const text = c.state === "missing" ? "moshi: Install" : update ? "moshi: Update" : c.state === "unconnected"
     ? "moshi: Connect" : c.state === "connected" ? `moshi ✓ ${count}` : "moshi: ?";
-  const install = argvOf(c.install_argv);
+  const install = c.state === "missing" || update ? argvOf(c.install_argv) : null;
   const connect = c.state === "unconnected" ? argvOf(c.connect_argv) : null;
   const action = install ? { name: c.state === "missing" ? "Install moshi-cockpit" : "Update moshi-cockpit", argv: install }
     : connect ? { name: "Connect to moshi", argv: connect } : null;
@@ -33,12 +35,13 @@ export function cockpitLink(c) {
 // New creates an agent with its own moshi identity there only with a connected, current moshi-cockpit.
 export const moshiReady = (c) => c?.state === "connected" && !c.update;
 
-// The harness chips of New's moshi form, from that machine's `agent list --json` offer rows.
-export function moshiChips(harnesses) {
+// The harness chips of New's moshi form, from `machine`'s `agent list --json` offer rows. Each note names its harness.
+export function moshiChips(harnesses, machine) {
   return (Array.isArray(harnesses) ? harnesses : []).filter((h) => Object.prototype.hasOwnProperty.call(NAMES, h?.name))
     .map((h) => ({
       name: h.name, label: NAMES[h.name], selectable: !!h.installed && !!h.available,
-      note: h.installed ? (h.available ? "" : plain(h.reason, 160)) : "not installed on that machine",
+      note: h.installed ? (h.available ? "" : `${NAMES[h.name]}: ${plain(h.reason, 160)}`)
+        : `${NAMES[h.name]} is not installed on ${plain(machine, 254) || "that machine"}`,
     }));
 }
 

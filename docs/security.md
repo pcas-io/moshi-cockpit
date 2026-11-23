@@ -16,6 +16,10 @@ this repository; if the two ever disagree, the code is right and this file is a 
 | `~/.local/state/moshi-cockpit/` | `inventory.json`, the machine inventory cache (see Machines); `backups.json`, the list of every file the cockpit changed, so `uninstall` can restore them (the backup copies themselves sit next to each file as `<name>.bak-<date>-<time>`); `inventory.lock`, the lock that keeps two inventory runs from writing the cache at once; a marker that the earlier setup was imported; `locks/`, lock files that keep two rewrites of the same Keychain entry apart. |
 | `~/.local/share/moshi-cockpit/` | The installed release, the pinned Python runtime, and per agent the files its harness needs (a Vibe profile, say). |
 | `~/.gemini/config/mcp_config.json` | Only with an agy agent: its moshi and ocellio tokens, in plain text, mode 0600 (see below). |
+| `~/.local/state/moshi-cockpit/remote-cockpit.json` (on the Mac) | Per Linux machine: moshi-cockpit's state there (OS, installed or connected, its version, which harnesses can take an agent, whether ocellio is set up) and each agent's name, harness and role; mode 0600, no token. `remote-cockpit.lock` next to it keeps two checks from writing it at once. |
+| On a Linux machine: the Secret Service (libsecret), same service and account names as above | The same tokens as in the Keychain, for that machine's own installation, when the Secret Service works there (see [Tokens on Linux machines](#tokens-on-linux-machines)). |
+| On a Linux machine: `~/.config/moshi-cockpit/secrets.json` | The same tokens in one file, mode 0600, when the Secret Service does not work there. |
+| On a Linux machine: `~/.config/moshi-cockpit/secrets-store` | A marker (the words `secret-service`, no token) that keeps the Secret Service the store once it took a token. |
 
 No token is written to an argument list, a log or an error message, and with one exception never to a file.
 Keychain writes go through `security -i` on standard input; tokens reach an agent through its environment.
@@ -43,7 +47,13 @@ account names as on the Mac. The first choice sticks, so tokens never end up spl
    headless machine fails that test, and the file is used instead, created on the first write.
 
 Tokens reach `secret-tool` on standard input, never as an argument. Any call that hangs ends after 10 seconds
-with an error that names the entry, never with a hang.
+with an error that names the entry, never with a hang. An entry counts as missing only when `secret-tool`
+ends with exit code 1 and prints nothing; any other failure (a locked keyring, no session bus) ends with the
+"did not answer" sentence above, without `secret-tool`'s output.
+
+Linux has no per-read approval: neither store asks before a read, so any process of that machine's user can
+read the tokens there, including the registration token while it is valid (up to 24 hours). Strict storage
+(see [Registration token](#registration-token)) exists only in the macOS Keychain.
 
 The file holds `{"version": 1, "entries": {"<service>": {"<account>": "<token>"}}}` and is mode 0600; its
 folder is created 0700 when new, and an existing folder keeps its mode. Every change rewrites the file whole:
@@ -108,9 +118,9 @@ downloads. Downloads are HTTPS only (`--proto =https`, TLS 1.2 or newer). Both f
 anything is unpacked or run; a mismatch stops the installer before it changes anything. The runtime is reused
 only when the hash stored next to it matches; that hash is written only after the unpacked Python started, so
 a runtime that cannot run here (a Linux host without glibc) is downloaded again next time. Herdr is never downloaded by the cockpit: you install it from
-its vendor first. On a remote Linux machine, Install in the Machines tab fetches the install.sh of this Mac's
-version (its pinned release tag) over HTTPS only; that install.sh then verifies Python and the payload by
-SHA-256 as above.
+its vendor first. On a remote Linux machine, Install (and Update) in the Machines tab fetches the install.sh of
+this Mac's version, from that release tag, over HTTPS only. That install.sh itself is not hash-checked: you
+trust GitHub's HTTPS and the release for it. It then verifies Python and the payload by SHA-256 as above.
 
 ## Agent CLI installers
 
@@ -174,6 +184,11 @@ yes. The cockpit adds no installer a vendor does not publish.
   connected, and each agent's name, harness and role. Those it caches per machine in
   `~/.local/state/moshi-cockpit/remote-cockpit.json` (mode 0600, no token), which "Your agents" reads. A
   harness started through "Where" on a machine without a connected moshi-cockpit runs without moshi.
+- **Connect on a Linux machine.** Connect runs `moshi-cockpit connect` in a tab on that machine: it prints the
+  link and the code and opens no browser there; you approve on the Mac or your phone. If ocellio is set up,
+  you type your ocellio token into that tab during Connect (hidden input): the keystrokes travel over Herdr's
+  ssh connection to the machine, its moshi-cockpit stores the token there, and the cockpit on the Mac never
+  reads or keeps it.
 
 ## Pins and groups
 
@@ -193,7 +208,8 @@ pre-push hook and `tools/check.sh` run it, and without the list it fails closed.
 ## Residual risks
 
 - A process of the same macOS user can read Keychain entries that are not strict (the device key, the agent
-  tokens and the ocellio token) without a prompt. With an agy agent, the same goes for its moshi and ocellio
+  tokens and the ocellio token) without a prompt. On a Linux machine any process of that user can read every
+  token there, the registration token included (see [Tokens on Linux machines](#tokens-on-linux-machines)). With an agy agent, the same goes for its moshi and ocellio
   tokens in `~/.gemini/config/mcp_config.json`, which any process of your user can read. Only the registration token asks every time. The cockpit
   does not isolate agents from you: an agent runs as your user.
 - Herdr mods run with full rights in your Herdr window. The cockpit ships its own and `doctor` warns about any

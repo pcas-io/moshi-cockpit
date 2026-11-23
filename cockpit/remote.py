@@ -4,8 +4,9 @@
 Everything goes through `hc exec --on <machine>`, which passes argv intact. The probe is `PROBE_SCRIPT`, static;
 the remote login shell may print a MOTD around it, so only marker lines count and the answer must end with the
 `end` marker. States are cached in `state/remote-cockpit.json` (0600) for a minute; a failed probe never
-overwrites the cache. hc mixes its own exit codes with the remote program's: only 0, 1 and 3 are the remote's
-answer, 127 means moshi-cockpit is missing there, anything else that the machine did not answer.
+overwrites the cache. An add or load that answered 0 probes once more, so the new agent shows at once. hc mixes
+its own exit codes with the remote program's: only 0, 1 and 3 are the remote's answer, 127 means moshi-cockpit
+is missing there, anything else that the machine did not answer.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES
 from cockpit.machines import Runner, first_line, hc_path
 from cockpit.paths import Paths
-from cockpit.registry import NAME_RE, validate_name
+from cockpit.registry import MAX_ROLE, NAME_RE, bound_role, validate_name
 from cockpit.targets import check_target
 from cockpit.text import clean
 
@@ -67,6 +68,8 @@ NO_HC = "Herdr's hc is not available on this Mac"
 ANSWERS = (0, 1, 3)  # exit codes that come from moshi-cockpit there, not from hc or ssh
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 UNEXPECTED = "moshi-cockpit there answered something unexpected; run moshi-cockpit doctor there"
+UNREADABLE_VERSION = ("moshi-cockpit there reports no version this Mac can read, so it is not offered an update;"
+                      " run moshi-cockpit doctor there")
 MAX_TEXT = 300
 
 
@@ -82,9 +85,10 @@ def run_argv(name: str) -> List[str]:
     return ["/bin/sh", "-lc", 'exec "$HOME/.local/bin/moshi-cockpit" run "$1"', "sh", name]
 
 
-def install_argv(paths: Paths) -> List[str]:
-    """A held tab on the machine: this Mac's version of install.sh, verified downloads, this Mac's servers."""
-    servers = load_config(paths).servers
+def install_argv(paths: Paths, update: bool = False) -> List[str]:
+    """A held tab on the machine: this Mac's version of install.sh, verified downloads, this Mac's servers for a
+    new install; an update passes none, so the machine keeps its own (install.sh shows them, Enter keeps them)."""
+    servers = {} if update else load_config(paths).servers
     return ["/bin/sh", "-lc", INSTALL_SCRIPT, "sh", INSTALL_URL, servers.get("moshi", ""), servers.get("ocellio", "")]
 
 
@@ -115,6 +119,13 @@ def _harnesses(rows: object) -> List[Dict]:
     return found
 
 
+def _version(text: object) -> Optional[Tuple[int, ...]]:
+    """Parses "1.2.3" as (1, 2, 3); None for anything else."""
+    if not isinstance(text, str) or not VERSION_RE.fullmatch(text):
+        return None
+    return tuple(int(part) for part in text.split("."))
+
+
 def parse_probe(stdout: str) -> Dict:
     """The probe's marker lines (the first of each kind) as a state; any other line is noise. ValueError
     ("incomplete answer") without the `end` marker."""
@@ -138,8 +149,9 @@ def parse_probe(stdout: str) -> Dict:
     if not isinstance(data, dict) or not isinstance(data.get("agents"), list):
         return dict(result, message=UNEXPECTED)
     version, servers = data.get("version"), data.get("servers")
-    return dict(result, state="connected" if data.get("connected") is True else "unconnected",
-                version=version if isinstance(version, str) and VERSION_RE.fullmatch(version) else None,
+    if _version(version) is None:
+        return dict(result, message=UNREADABLE_VERSION)
+    return dict(result, state="connected" if data.get("connected") is True else "unconnected", version=version,
                 agents=_agents(data["agents"]), harnesses=_harnesses(data.get("harnesses")),
                 ocellio=isinstance(servers, dict) and servers.get("ocellio") is True)
 
@@ -205,6 +217,15 @@ def _probe(paths: Paths, machine: str, runner: Runner) -> Dict:
         raise ValueError(f"{machine} did not answer: {exc}") from None
 
 
+def _reprobe(paths: Paths, machine: str, runner: Runner) -> None:
+    """After an add or load there: the machine's state once more (best effort), so its new agent shows at once;
+    the cached entry goes only when that probe fails."""
+    try:
+        _store(paths, machine, dict(_probe(paths, machine, runner), at=time.time()))
+    except (ValueError, OSError):
+        forget(paths, machine)
+
+
 def _state_text(state: str, count: int, message: str, update: bool) -> str:
     text = {"unsupported": "", "missing": "moshi-cockpit not installed",
             "unconnected": "moshi-cockpit not connected to moshi",
@@ -225,7 +246,8 @@ def cockpit_state(paths: Paths, machine: str, runner: Runner, refresh: bool = Fa
         _store(paths, machine, entry)
     state, linux = entry["state"], entry.get("os") == "Linux"
     version = entry.get("version")
-    update = linux and state != "missing" and version != __version__
+    found = _version(version) if state in ("unconnected", "connected") else None
+    update = linux and found is not None and found < (_version(__version__) or ())  # never a downgrade
     agents = [dict(a, run_argv=run_argv(a["name"])) for a in _agents(entry["agents"])]
     return {"machine": machine,
             "checked_at": datetime.fromtimestamp(entry["at"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -233,7 +255,7 @@ def cockpit_state(paths: Paths, machine: str, runner: Runner, refresh: bool = Fa
             "state_text": _state_text(state, len(agents), clean(entry.get("message"), "", limit=MAX_TEXT), update),
             "version": version, "update": update, "agents": agents, "harnesses": _harnesses(entry.get("harnesses")),
             "ocellio": entry.get("ocellio") is True,
-            "install_argv": install_argv(paths) if linux and (state == "missing" or update) else None,
+            "install_argv": install_argv(paths, update) if linux and (state == "missing" or update) else None,
             "connect_argv": connect_argv(machine) if linux and state in ("unconnected", "connected") else None}
 
 
@@ -250,10 +272,19 @@ def cached_agents(paths: Paths) -> List[Dict]:
     return sorted(found, key=lambda a: (a["machine"], a["name"]))
 
 
-def _check_text(label: str, text: object) -> str:
-    if not isinstance(text, str) or clean(text, "") != text or len(text) > MAX_TEXT:
-        raise ValueError(f"The {label} must be one line of at most {MAX_TEXT} characters")
-    return text
+def check_role(role: object) -> str:
+    """The role rule of the dialog's roleText (rules.js), refused here instead of cleaned: one line, no control or
+    format characters (Unicode category C: escapes, zero-width and direction marks), at most MAX_ROLE UTF-16 units
+    as moshi counts them. ValueError names the reason."""
+    if not isinstance(role, str):
+        raise ValueError("The role must be text")
+    if any(ch in "\n\r\u2028\u2029" for ch in role):
+        raise ValueError("The role must be one line")
+    if clean(role, "") != role:
+        raise ValueError("The role must not contain control or format characters")
+    if bound_role(role) != role:
+        raise ValueError(f"The role must be at most {MAX_ROLE} characters")
+    return role
 
 
 def _message(err: str) -> str:
@@ -311,8 +342,8 @@ def agent_call(paths: Paths, machine: str, action: str, runner: Runner, name: Op
     if action in ("add", "load"):
         validate_name(name or "")
         tail = ["load", name]
-    _check_text("role", role)
-    if _check_text("skill", skill) and not NAME_RE.fullmatch(skill):
+    check_role(role)
+    if not isinstance(skill, str) or (skill and not NAME_RE.fullmatch(skill)):  # the dialog's checkSkill
         raise ValueError("Invalid skill name (letters, digits, _ and -)")
     if action == "add":
         if harness not in OWN_HARNESSES:
@@ -326,7 +357,10 @@ def agent_call(paths: Paths, machine: str, action: str, runner: Runner, name: Op
         notes = [clean(line.rstrip("\r")[2:], "", limit=500) for line in (out or "").splitlines() if line.startswith("• ")]
         message = _message(err)
         if action != "catalog":
-            forget(paths, machine)
+            if code == 0:
+                _reprobe(paths, machine, runner)
+            else:
+                forget(paths, machine)
     elif code == 127 and not os.path.exists(hc_path(paths)):
         code, message = 1, NO_HC
     elif code == 127:

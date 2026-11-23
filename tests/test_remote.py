@@ -167,14 +167,23 @@ class RemoteTest(unittest.TestCase):
     def test_version_mismatch_offers_update(self):
         found, _ = self.state(listing(connected=False, version="0.0.1"))
         self.assertEqual((found["version"], found["update"]), ("0.0.1", True))
-        self.assertEqual(found["install_argv"][4], remote.INSTALL_URL)
+        self.assertEqual(found["install_argv"][4:], [remote.INSTALL_URL, "", ""])  # the machine keeps its servers
         self.assertEqual(found["state_text"], f"moshi-cockpit not connected to moshi · update to {cockpit.__version__}")
+        found, _ = self.state(listing([agent("ok-1")], version="99.0.0"), refresh=True)  # newer: never a downgrade
+        self.assertEqual((found["version"], found["update"], found["install_argv"]), ("99.0.0", False, None))
+        self.assertEqual(found["state_text"], "moshi-cockpit connected (1 agent)")
+        major, minor, patch = (int(p) for p in cockpit.__version__.split("."))
+        found, _ = self.state(listing(version=f"{major}.{minor + 1}.0"), refresh=True)
+        self.assertIs(found["update"], False)
+        found, _ = self.state(listing(version=f"{major}.{minor}.{patch + 10}"), refresh=True)  # 10 > 9 as numbers
+        self.assertIs(found["update"], False)
         older = json.loads(listing(connected=False))
-        del older["version"]  # a moshi-cockpit from before the version field
-        found, _ = self.state(json.dumps(older), refresh=True)
-        self.assertEqual((found["version"], found["update"]), (None, True))
-        found, _ = self.state(listing(version="1.2.3-evil"), refresh=True)
-        self.assertEqual((found["version"], found["update"]), (None, True))
+        del older["version"]  # no version at all
+        for answer in (json.dumps(older), listing(version="1.2.3-evil"), listing(version="1.2")):
+            found, _ = self.state(answer, refresh=True)
+            self.assertEqual((found["state"], found["version"], found["update"]), ("error", None, False))
+            self.assertEqual((found["install_argv"], found["connect_argv"], found["agents"]), (None, None, []))
+            self.assertEqual(found["state_text"], remote.UNREADABLE_VERSION)
 
     def test_noise_around_the_probe_is_ignored(self):
         out = ("Welcome\nmoshi-cockpit-remote is great\n" + probe_out(answer="{bad") +
@@ -228,26 +237,29 @@ class RemoteTest(unittest.TestCase):
     def test_agent_call_passes_argv_intact(self):
         runner = FakeRunner((0, "• Agent ok-1 (codex) created\n", ""))
         self.add(runner)
-        (argv, timeout), = runner.calls
+        (argv, timeout), probe = runner.calls  # an answer 0 probes the machine once more
+        self.assertEqual(probe, (remote.probe_argv(self.paths, "devbox"), remote.PROBE_TIMEOUT))
         self.assertEqual(timeout, remote.AGENT_TIMEOUT)
         self.assertEqual(argv[:9], [self.hc, "exec", "--on", "devbox", "--timeout", "90", "/bin/sh", "-lc",
                                     remote.CLI_SCRIPT])
         self.assertEqual(argv[8], 'c="$HOME/.local/bin/moshi-cockpit"; [ -x "$c" ] || exit 127; exec "$c" "$@"')
         self.assertEqual(argv[9:], ["sh", "agent", "add", "ok-1", "--harness", "codex",
                                     '--role=reviews; echo "$HOME" `id`', "--skill="])
+        runner = FakeRunner((1, "", "Error: no\n"))  # no second probe after an answer other than 0
         for role in ("-x", "--", "--harness=claude"):  # one argument each, never read as an option there
             self.add(runner, role=role, skill="skill-a")
             self.assertEqual(runner.calls[-1][0][-2:], [f"--role={role}", "--skill=skill-a"])
-        del runner.calls[1:]
+        self.assertEqual(len(runner.calls), 3)
+        del runner.calls[:]
         remote.agent_call(self.paths, "devbox", "load", runner, name="ok-2")
         remote.agent_call(self.paths, "devbox", "catalog", runner)
-        self.assertEqual(runner.calls[1][0][9:], ["sh", "agent", "load", "ok-2"])
-        self.assertEqual(runner.calls[2][0][9:], ["sh", "agent", "catalog", "--json"])
+        self.assertEqual(runner.calls[0][0][9:], ["sh", "agent", "load", "ok-2"])
+        self.assertEqual(runner.calls[1][0][9:], ["sh", "agent", "catalog", "--json"])
 
     def test_agent_call_validates_before_any_call(self):
         runner = FakeRunner()
         for options in (dict(name="bad name"), dict(name="-x"), dict(harness="grok"), dict(harness="nope"),
-                        dict(role="a\nb"), dict(skill="s\x1b"), dict(role="r" * 301), dict(skill="-x"),
+                        dict(role="a\nb"), dict(skill="s\x1b"), dict(role="r" * 65), dict(skill="-x"),
                         dict(skill="a b"), dict(skill="a;b")):
             with self.assertRaises(ValueError, msg=options):
                 self.add(runner, **options)
@@ -257,6 +269,27 @@ class RemoteTest(unittest.TestCase):
             remote.agent_call(self.paths, "devbox", "remove", runner, name="ok-1")
         with self.assertRaises(ValueError):
             remote.agent_call(self.paths, "devbox", "load", runner, name=None)
+        self.assertEqual(runner.calls, [])
+
+    def test_role_rule_matches_the_dialog(self):
+        # the samples of tests/js/rules.test.mjs: raw (refused here, with the reason) → what roleText sends (taken)
+        samples = [("dev\u200dops", "dev ops", "control or format"), ("a\u202eb", "a b", "control or format"),
+                   ("a\u2028b", "a b", "one line"), ("\ue000x", "x", "control or format"),
+                   ("soft\u00adhyphen", "soft hyphen", "control or format"), ("x" * 65, "x" * 64, "at most 64"),
+                   ("\U0001F600" * 33, "\U0001F600" * 32, "at most 64"), ("a\nb", "a b", "one line"),
+                   ("a\tb", "a b", "control or format")]
+        for raw, sent, reason in samples:
+            with self.assertRaises(ValueError, msg=raw) as caught:
+                remote.check_role(raw)
+            self.assertIn(reason, str(caught.exception))
+            self.assertEqual(remote.check_role(sent), sent)
+        with self.assertRaises(ValueError) as caught:
+            remote.check_role(None)
+        self.assertEqual(str(caught.exception), "The role must be text")
+        runner = FakeRunner()
+        with self.assertRaises(ValueError) as caught:
+            self.add(runner, skill="s\x1b")
+        self.assertEqual(str(caught.exception), "Invalid skill name (letters, digits, _ and -)")  # the actual reason
         self.assertEqual(runner.calls, [])
 
     def test_agent_call_maps_exit_codes(self):
@@ -352,6 +385,21 @@ class RemoteTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["remote"], [{"name": "ok-1", "harness": "codex", "role": "",
                                                       "machine": "build-1", "run_argv": remote.run_argv("ok-1")}])
+
+    def test_add_answered_0_shows_the_new_agent_at_once(self):
+        self.state(listing([agent("ok-1")]), refresh=True)
+        added = probe_out(answer=listing([agent("ok-1"), agent("ok-2")]))
+        runner = FakeRunner((0, "• Agent ok-2 (codex) created\n", ""), {remote.PROBE_SCRIPT: (0, added, "")})
+        code, _ = self.add(runner, name="ok-2")
+        self.assertEqual((code, len(runner.calls)), (0, 2))
+        code, out, err = self.run_cli(["status", "--json"], FakeRunner())
+        self.assertEqual(code, 0, err)
+        self.assertEqual([(a["machine"], a["name"]) for a in json.loads(out)["remote"]],
+                         [("devbox", "ok-1"), ("devbox", "ok-2")])
+        load = FakeRunner((0, "• Agent ok-3 (codex) loaded\n", ""), {remote.PROBE_SCRIPT: (255, "", "reset\n")})
+        code, _ = remote.agent_call(self.paths, "devbox", "load", load, name="ok-3")
+        self.assertEqual((code, len(load.calls)), (0, 2))
+        self.assertNotIn("devbox", json.loads(self.cache.read_text()))  # that probe failed: the entry goes
 
     def test_cached_agents_ignore_age_and_sort_by_machine(self):
         self.state(listing([agent("zed"), agent("abc")]), machine="devbox", now=lambda: 1.0)
