@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
-from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, remote, removal, sessions, status, targets, wizard
+from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, remote, removal, ring, roster, sessions, status, targets, wizard
+from cockpit import hc as hc_mod
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
 from cockpit.backup import BackupStore
@@ -52,6 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     stat = sub.add_parser("status", help="moshi mesh overview (read with this Herdr's device key)")
     stat.add_argument("--json", action="store_true", help="compact JSON (for the sidebar in Herdr)")
 
+    ros = sub.add_parser("roster", help="who runs where on this machine: agents, terminals, presence")
+    ros.add_argument("--json", action="store_true", help="for agents: the same rows as JSON")
+    rng = sub.add_parser("ring", help="wake an agent on this machine for a message you sent it through moshi")
+    rng.add_argument("agent")
+    rng.add_argument("message_id", nargs="?", help="the moshi message id (msg_…)")
+    rng.add_argument("--without-record", metavar="TEXT", help="only while moshi is down: paste TEXT itself, "
+                     "marked [no-record]; record it in moshi once it is back")
     con = sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
     con.add_argument("--label", help="the installation's name in moshi (default: this machine's host name)")
     sub.add_parser("migrate", help="move the agents of an earlier setup to this installation (after connect)")
@@ -180,6 +188,7 @@ def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
     try:
         start = launch.prepare(paths, keychain, args.agent, rest)
         launch.claim(paths, keychain, args.agent, take_over, confirm=_ask_take_over if terminal else None)
+        launch.label_terminal(paths, args.agent)
         launch.execute(start)
     except launch.ActiveElsewhere as exc:
         if terminal:
@@ -269,6 +278,31 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
                                              else "moshi not set up"))
     for problem in status.problems(paths):
         print(f"Note: {problem}")
+    return 0
+
+
+def _hc(paths: Paths) -> hc_mod.Hc:
+    binary = hc_mod.find_binary(paths)
+    if not binary:
+        raise ValueError("herdr-core (hc) is not installed on this machine")
+    return hc_mod.Hc(binary)
+
+
+def cmd_roster(args: argparse.Namespace, paths: Paths) -> int:
+    found = roster.gather(paths, default_store(), _hc(paths))
+    print(roster.as_json(found) if args.json else roster.render(found))
+    return 0
+
+
+def cmd_ring(args: argparse.Namespace, paths: Paths) -> int:
+    if (args.message_id is None) == (args.without_record is None):
+        raise ValueError("give either a message id or --without-record TEXT")
+    hc = _hc(paths)
+    if args.without_record is not None:
+        address = ring.ring_without_record(paths, args.agent, args.without_record, hc)
+    else:
+        address = ring.ring(paths, args.agent, args.message_id, hc)
+    print(f"rang {clean(args.agent, '?', limit=64)} in {address}")
     return 0
 
 
@@ -558,7 +592,8 @@ def _machine_add(args: argparse.Namespace, paths: Paths) -> int:
 
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
             "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect,
-            "harness": cmd_harness, "migrate": cmd_migrate, "machine": cmd_machine}
+            "harness": cmd_harness, "migrate": cmd_migrate, "machine": cmd_machine, "roster": cmd_roster,
+            "ring": cmd_ring}
 
 
 # What a command ends with on a known failure: one line on stderr and an exit code, never a traceback.

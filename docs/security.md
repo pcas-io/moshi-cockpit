@@ -190,6 +190,32 @@ yes. The cockpit adds no installer a vendor does not publish.
   ssh connection to the machine, its moshi-cockpit stores the token there, and the cockpit on the Mac never
   reads or keeps it.
 
+## Roster and ring
+
+`roster` reads herdr-core's terminals on this machine and the label `agent=<name>` that `run` sets on its
+terminal, and moshi's presence with the device key. `ring` is how one agent wakes another on this machine. It
+never types free text, presses no keys and reads no screen:
+
+- The message id must have moshi's shape (`msg_` and 26 characters), and moshi must confirm with the caller's
+  own agent token (`mesh_get`) that the message exists and is addressed to the recipient. Without an own token
+  (an agent started without `run`) ring refuses.
+- The address comes from the roster only, never from a message: the one live terminal labelled with that name
+  in which an agent reports its own status to herdr-core. herdr-core clears that report when the shell returns
+  to the foreground, so a label left behind by an agent that has ended is ignored: a line pasted into a shell,
+  a password prompt or a REPL would be submitted there. The terminal is checked once more right before the
+  paste. Two terminals with the same name are refused.
+- `run` looks for herdr-core only where it installs itself under this HOME (`~/.local/bin/hc`, the bundle),
+  never on `PATH`.
+- The line is `Moshi <id> — <type> from <sender>`: the type reduced to identifier characters, the sender
+  without control characters, on one line.
+- `--without-record` pastes the given text, marked `[no-record]` and reduced to one line without control
+  characters, and only while moshi does not answer. The recipient cannot verify its sender.
+
+The agent environment of codex, vibe and agy still drops the `HC_*` variables, and `run` passes the terminal
+address as `COCKPIT_HC_ADDRESS` instead. This is hygiene, not a boundary: hc reaches the core over its default
+socket without those variables, and any process of your user can call it, including `hc keys` into another
+agent's terminal. The rules every agent gets tell it to ring through `moshi-cockpit ring` and nothing else.
+
 ## Pins and groups
 
 The cockpit layout's spaces list keeps pins and groups in Herdr's shared store (space ids and your group
@@ -218,6 +244,10 @@ pre-push hook and `tools/check.sh` run it, and without the list it fails closed.
 - The vendor installers behind `harness install` and the Install cells of the Machines tab are the vendors' own pipe-to-shell commands; you trust them
   the way you would if you ran them by hand.
 - The leak guard only knows the words on your private list.
+- Any process of your user can call herdr-core (`hc`) directly, also from an agent whose environment dropped
+  the `HC_*` variables, and press keys in another terminal. `ring` narrows what the cockpit's own rules ask
+  agents to do; it does not take hc away from them. Labels can be set by the same processes, so a label says
+  where an agent says it runs, not who it is.
 
 ## Reporting a problem
 

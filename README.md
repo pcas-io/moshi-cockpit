@@ -228,7 +228,10 @@ and activation is skipped.
 | `uninstall` | Restore every change from the backups. Your settings in `~/.config/moshi-cockpit/`, the Keychain entries and Herdr itself stay. |
 | `connect` | Connect this Herdr to moshi with one approval in the browser. |
 | `migrate` | Move the agents of an earlier setup to this installation (after `connect`). |
-| `run [--take-over] AGENT [ARGS…]` | Start an agent through its harness. `--take-over` starts it here even when another installation holds it. Arguments after the name go to the harness. |
+| `run [--take-over] AGENT [ARGS…]` | Start an agent through its harness. `--take-over` starts it here even when another installation holds it. Arguments after the name go to the harness. In a herdr-core terminal it labels that terminal `agent=AGENT`, so the roster knows who runs there. |
+| `roster [--json]` | Who runs where on this machine: agents in herdr-core terminals with their status and moshi presence, your agents that are not started, and agent terminals without a name (started without `run`). Agents read `--json` to find each other. |
+| `ring AGENT MESSAGE_ID` | Wake an agent on this machine for a message you sent it through moshi. Checks with your agent's own token that the message exists and is addressed to AGENT, then pastes one line, `Moshi <id> — <type> from <sender>`, into the terminal the roster names. Only from an agent started with `run`. |
+| `ring AGENT --without-record TEXT` | Only while moshi does not answer: pastes `[no-record] TEXT` instead. Record the message in moshi once it is back. Refused while moshi answers. |
 | `doctor [--json] [--quiet]` | Check the setup. Exit code is not 0 on errors. `--quiet` prints nothing unless there is an error, then one sentence with one action. |
 | `status [--json]` | moshi mesh overview, read with this Herdr's device key. `--json` is compact output for the sidebar. |
 | `agent add [NAME] [--harness H] [--role TEXT] [--skill NAME]` | Create an agent (in moshi too, when set up). With a name and `--harness` it runs without a terminal; otherwise it asks. |
