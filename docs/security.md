@@ -230,6 +230,22 @@ address as `COCKPIT_HC_ADDRESS` instead. This is hygiene, not a boundary: hc rea
 socket without those variables, and any process of your user can call it, including `hc keys` into another
 agent's terminal. The rules every agent gets tell it to ring through `moshi-cockpit ring` and nothing else.
 
+## dispatch and the focus instead of a second start
+
+- `dispatch` checks the message like `ring` (shape, the caller's own token, `mesh_get`, addressed to the agent)
+  before anything starts. It never ends an agent: one that runs already is only rung, and with `--model` or
+  `--effort` dispatch refuses.
+- A start goes through herdr-core as the caller's child with `--outlive-parent`. A started program gets
+  herdr-core's environment, not the caller's, so the caller's token never reaches it; `moshi-cockpit run` gives
+  it its own.
+- hc sends a first message only to templates, so dispatch creates one short-lived template
+  (`~/.config/herdr-core/templates/.dispatch-<job>-<random>.md`, created exclusively, mode 0600) with the
+  model and effort arguments, and removes it again right after the start, also when the start fails. Model
+  names are limited to letters, digits and `. _ : / -`, efforts to five words.
+- `run` shows the terminal where an agent runs already instead of starting it a second time (one identity,
+  one terminal); `--take-over` starts it anyway. It asks herdr-core and herdr-app only where they install
+  themselves under this HOME, never on `PATH`.
+
 ## Skill, templates and the Claude Code hook
 
 - The `agent-mesh` skill is written through the backup store; `uninstall` removes it.

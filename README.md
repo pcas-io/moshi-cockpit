@@ -233,6 +233,16 @@ and activation is skipped.
   that you wrote yourself stays as it is.
 - **A SessionStart hook for Claude Code** that warns once in a session started without `run`, because such a
   session has no moshi identity of its own.
+- **The `orchestrate` skill** for an agent that hands work to the others.
+
+### A Conductor
+
+Create one agent to talk to and let it coordinate the rest, for example
+`moshi-cockpit agent add Conductor --harness claude --role "orchestrator"`, and use it as your usual Claude tab.
+Ask it in plain words, such as "start the agy agent with Carbon at high effort and give it this task". It looks
+the model up, sends the task through moshi, runs `moshi-cockpit dispatch`, and a tab with the agent opens beside
+it. The agent answers through moshi and rings the Conductor, which tells you the result. Approvals stay in each
+agent's own tab.
 
 ## Command line
 
@@ -244,10 +254,11 @@ and activation is skipped.
 | `uninstall` | Restore every change from the backups. Your settings in `~/.config/moshi-cockpit/`, the Keychain entries and Herdr itself stay. |
 | `connect` | Connect this Herdr to moshi with one approval in the browser. |
 | `migrate` | Move the agents of an earlier setup to this installation (after `connect`). |
-| `run [--take-over] AGENT [ARGS…]` | Start an agent through its harness. `--take-over` starts it here even when another installation holds it. Arguments after the name go to the harness. In a herdr-core terminal it labels that terminal `agent=AGENT`, so the roster knows who runs there. |
+| `run [--take-over] AGENT [ARGS…]` | Start an agent through its harness. `--take-over` starts it here even when another installation holds it, or when it runs already in another terminal here. Arguments after the name go to the harness. In a herdr-core terminal it labels that terminal `agent=AGENT`, so the roster knows who runs there. If AGENT runs already in another terminal, its tab comes to the front instead of a second start. |
 | `roster [--json]` | Who runs where on this machine: agents in herdr-core terminals with their status and moshi presence, your agents that are not started, and agent terminals without a name (started without `run`). Agents read `--json` to find each other. |
 | `ring AGENT MESSAGE_ID` | Wake an agent on this machine for a message you sent it through moshi. Checks with your agent's own token that the message exists and is addressed to AGENT, then pastes one line, `Moshi <id> — <type> from <sender>`, into the terminal the roster names. Only from an agent started with `run`. |
 | `ring AGENT --without-record TEXT` | Only while moshi does not answer: pastes `[no-record] TEXT` instead. Record the message in moshi once it is back. Refused while moshi answers. |
+| `dispatch AGENT MESSAGE_ID [--model M] [--effort E] [--name JOB] [--hidden] [--json]` | For an orchestrating agent: start AGENT for a message it sent through moshi, or wake it when it runs. Checks the message like `ring`. A start opens a tab in the caller's Herdr space without taking the focus (`--hidden`: no tab); the agent is the caller's child and keeps running when the caller ends. `--model` goes to the agent's program as it is; `--effort` (low, medium, high, xhigh, max) is translated per program (vibe has none). An agent that runs already is only rung; with `--model` or `--effort` dispatch refuses instead of ending it. |
 | `hook session-start` | For Claude Code's SessionStart hook, which `install` sets up: in a session started without `run` it says once that the session has no moshi identity of its own. Prints nothing otherwise, never fails. |
 | `doctor [--json] [--quiet]` | Check the setup. Exit code is not 0 on errors. `--quiet` prints nothing unless there is an error, then one sentence with one action. |
 | `status [--json]` | moshi mesh overview, read with this Herdr's device key. `--json` is compact output for the sidebar. |

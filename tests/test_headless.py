@@ -58,6 +58,7 @@ class InstallTest(unittest.TestCase):
         notes = installer.run(ctx, installer.InstallOptions(moshi=MOSHI), runner=no_runner)
         self.assertEqual(notes, [installer.HEADLESS_NOTE, f"Servers: moshi {MOSHI}, unchanged",
                                  "Launchers linked: unchanged", "Skill agent-mesh: unchanged",
+                                 "Skill orchestrate: unchanged",
                                  "hc templates: unchanged", "Claude Code hook: Claude Code is not set up here"])
 
 

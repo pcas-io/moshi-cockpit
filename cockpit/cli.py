@@ -11,7 +11,7 @@ from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
 from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, remote, removal, ring, roster, sessions, status, targets, wizard
-from cockpit import claude_hook, mesh_files
+from cockpit import claude_hook, dispatch, mesh_files
 from cockpit import hc as hc_mod
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
@@ -62,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     rng.add_argument("message_id", nargs="?", help="the moshi message id (msg_…)")
     rng.add_argument("--without-record", metavar="TEXT", help="only while moshi is down: paste TEXT itself, "
                      "marked [no-record]; record it in moshi once it is back")
+    dsp = sub.add_parser("dispatch", help="start an agent for a message you sent it through moshi, or wake it")
+    dsp.add_argument("agent")
+    dsp.add_argument("message_id", help="the moshi message id (msg_…)")
+    dsp.add_argument("--model", default="", help="model name, passed on as it is")
+    dsp.add_argument("--effort", default="", help="low, medium, high, xhigh or max (translated per harness)")
+    dsp.add_argument("--name", default="", help="name of the job and its terminal (a-z 0-9 - _)")
+    dsp.add_argument("--hidden", action="store_true", help="start without a tab in the Herdr window")
+    dsp.add_argument("--json", action="store_true")
     hk = sub.add_parser("hook", help="for Claude Code's hooks (install sets them up)")
     hk.add_argument("event", choices=["session-start"])
     con = sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
@@ -189,6 +197,12 @@ def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
         rest, take_over = rest[1:], True
     terminal = _on_terminal()
     keychain = default_store()
+    elsewhere = "" if take_over else launch.running_elsewhere(paths, args.agent)
+    if elsewhere:  # one identity, one terminal: show the running one instead of starting a second
+        shown = launch.focus(paths, elsewhere)
+        print(f"{args.agent} runs already in {elsewhere}" + ("; its tab is in front now." if shown else ".")
+              + f" To start it here anyway: moshi-cockpit run {args.agent} {TAKE_OVER}")
+        return 0
     try:
         start = launch.prepare(paths, keychain, args.agent, rest)
         launch.claim(paths, keychain, args.agent, take_over, confirm=_ask_take_over if terminal else None)
@@ -311,6 +325,14 @@ def cmd_ring(args: argparse.Namespace, paths: Paths) -> int:
     else:
         address = ring.ring(paths, args.agent, args.message_id, hc)
     print(f"rang {clean(args.agent, '?', limit=64)} in {address}")
+    return 0
+
+
+def cmd_dispatch(args: argparse.Namespace, paths: Paths) -> int:
+    done = dispatch.dispatch(paths, args.agent, args.message_id, _hc(paths), args.model, args.effort, args.name,
+                             args.hidden)
+    print(json.dumps({"address": done.address, "action": done.action}) if args.json
+          else f"{done.action} {clean(args.agent, '?', limit=64)} in {done.address}")
     return 0
 
 
@@ -610,7 +632,7 @@ def _machine_add(args: argparse.Namespace, paths: Paths) -> int:
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
             "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect,
             "harness": cmd_harness, "migrate": cmd_migrate, "machine": cmd_machine, "roster": cmd_roster,
-            "ring": cmd_ring, "hook": cmd_hook}
+            "ring": cmd_ring, "hook": cmd_hook, "dispatch": cmd_dispatch}
 
 
 # What a command ends with on a known failure: one line on stderr and an exit code, never a traceback.

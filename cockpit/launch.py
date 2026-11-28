@@ -16,13 +16,14 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from cockpit import agents_remote, status
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES, Ctx
 from cockpit.harnesses.base import DROPPED_ENV, DROPPED_ENV_PREFIXES, TOKEN_ENV_PREFIXES
 from cockpit.hc import AGENT_LABEL, Hc, HcError, find_binary
+from cockpit.machines import run_capture
 from cockpit.moshi_api import MoshiApi, MoshiError
 from cockpit.roster import machine_name
 from cockpit.secrets import SecretStore
@@ -157,6 +158,33 @@ def label_terminal(paths: Paths, name: str, environ: Mapping[str, str] = os.envi
         (hc_for or Hc)(binary).label(terminal, AGENT_LABEL, find(paths, name).name)
     except HcError as exc:
         warn(f"{exc}; other agents cannot ring {name} here.")
+
+
+def running_elsewhere(paths: Paths, name: str, environ: Mapping[str, str] = os.environ,
+                      hc_for: Optional[Callable[[str], Hc]] = None) -> str:
+    """The terminal where `name` runs already, other than this one; "" when none does or hc is not here.
+    Like label_terminal, only herdr-core's own install places under this HOME are used, never PATH."""
+    binary = find_binary(paths, which=lambda program: None)
+    if not binary:
+        return ""
+    try:
+        terminals = (hc_for or Hc)(binary).terminals()
+    except HcError:
+        return ""
+    own = environ.get(HC_TERMINAL, "")
+    for terminal in terminals:
+        if terminal.agent_running and terminal.agent_name.lower() == name.lower() and terminal.address != own:
+            return terminal.address
+    return ""
+
+
+def focus(paths: Paths, address: str, runner: Callable[..., Tuple[int, str, str]] = run_capture) -> bool:
+    """Shows that terminal in the Herdr window (herdr-app agent.focus); False without herdr-app or on an error."""
+    app = paths.local_bin / "herdr-app"
+    if not app.exists():
+        return False
+    code, _, _ = runner([str(app), "do", "agent.focus", "--terminal", address], 15)
+    return code == 0
 
 
 def execute(start: Start, execve: Optional[Exec] = None) -> None:

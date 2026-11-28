@@ -21,29 +21,30 @@ from cockpit.backup import BackupStore
 from cockpit.paths import SHARE, Paths
 
 SKILL = "agent-mesh"
+SKILLS = ("agent-mesh", "orchestrate")  # orchestrate: for an agent that hands work to others (the Conductor)
 TEMPLATE_MARK = "moshi-cockpit agent with its own moshi identity"
 # Arguments a template adds for a harness (hc runs Codex without its daemon).
 TEMPLATE_ARGS = {"codex": ["--no-daemon"]}
 
 
-def skill_dir(paths: Paths) -> Path:
-    return paths.home / ".agents" / "skills" / SKILL
+def skill_dir(paths: Paths, skill: str = SKILL) -> Path:
+    return paths.home / ".agents" / "skills" / skill
 
 
 def templates_dir(paths: Paths) -> Path:
     return paths.home / ".config" / "herdr-core" / "templates"
 
 
-def install_skill(paths: Paths, backup: BackupStore) -> str:
-    text = (SHARE / "skills" / SKILL / "SKILL.md").read_text()
-    changed = backup.write_text(skill_dir(paths) / "SKILL.md", text)
+def install_skill(paths: Paths, backup: BackupStore, skill: str = SKILL) -> str:
+    text = (SHARE / "skills" / skill / "SKILL.md").read_text()
+    changed = backup.write_text(skill_dir(paths, skill) / "SKILL.md", text)
     claude_skills = paths.home / ".claude" / "skills"
     if (paths.home / ".claude").is_dir():
-        link = claude_skills / SKILL
+        link = claude_skills / skill
         if link.exists() and not link.is_symlink():
-            return f"Skill {SKILL}: ~/.claude/skills/{SKILL} is your own folder, not linked"
-        changed = backup.symlink(skill_dir(paths), link) or changed
-    return f"Skill {SKILL}: " + ("installed" if changed else "unchanged")
+            return f"Skill {skill}: ~/.claude/skills/{skill} is your own folder, not linked"
+        changed = backup.symlink(skill_dir(paths, skill), link) or changed
+    return f"Skill {skill}: " + ("installed" if changed else "unchanged")
 
 
 def template_text(paths: Paths, name: str, harness: str) -> str:

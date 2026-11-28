@@ -476,7 +476,7 @@ class HerdrFromTheVendorTest(unittest.TestCase):
     def test_cli_has_no_bot_or_test_commands(self):
         commands = set(cli.build_parser()._subparsers._group_actions[0].choices)
         self.assertEqual(commands, {"install", "uninstall", "connect", "run", "doctor", "status", "agent", "rules",
-                                    "sessions", "harness", "migrate", "machine", "roster", "ring", "hook"})
+                                    "sessions", "harness", "migrate", "machine", "roster", "ring", "hook", "dispatch"})
         for gone in (["bot", "add", "x"], ["bot", "admin-token"], ["bot", "register-token", "list"], ["test"]):
             with self.subTest(argv=gone), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
                 cli.main(gone)

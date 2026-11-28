@@ -98,6 +98,22 @@ class Hc:
         except HcError:
             return None
 
+    def run_template(self, template: str, task: str, name: str, labels: Sequence[str] = (),
+                     parent: str = "", outlive_parent: bool = True) -> Dict[str, Any]:
+        """Starts a template in the background with its first message; hc waits for the program to be ready
+        before it sends that message. Returns hc's answer (address, first_message)."""
+        args = ["run", "--bg", "--name", name]
+        for item in labels:
+            args += ["--label", item]
+        if parent:
+            args += ["--parent", parent]
+        if outlive_parent:
+            args.append("--outlive-parent")
+        answer = self._call(*args, template, task)
+        if not isinstance(answer, dict) or not isinstance(answer.get("address"), str):
+            raise HcError("hc run: no terminal address in its answer")
+        return answer
+
     def label(self, address: str, key: str, value: str) -> None:
         self._call("label", address, f"{key}={value}")
 
