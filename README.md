@@ -290,9 +290,9 @@ An interrupted command exits with `130`.
 moshi-cockpit uninstall
 ```
 
-restores every file the cockpit changed from its backups, including the link in `~/.local/bin`, the
-`agent-mesh` skill and the agents' hc templates. From `~/.claude/settings.json` it removes only its own
-SessionStart hook, so later changes to that file stay. A file whose backup is missing is left as it is and named
+restores every file the cockpit changed from its backups, including the link in `~/.local/bin` and the
+`agent-mesh` skill. It removes the agents' hc templates that are still its own (not one you have changed), and
+from `~/.claude/settings.json` only its own SessionStart hook, so later changes to that file stay. A file whose backup is missing is left as it is and named
 in the output. What stays, so that a later install picks up where
 you left off:
 

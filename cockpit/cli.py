@@ -11,7 +11,7 @@ from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
 from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, remote, removal, ring, roster, sessions, status, targets, wizard
-from cockpit import claude_hook
+from cockpit import claude_hook, mesh_files
 from cockpit import hc as hc_mod
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
@@ -227,7 +227,9 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
     settings = paths.mesh_config.parent
     notes = BackupStore(paths.state).restore_all(keep=settings)
     hook_note = claude_hook.remove(paths)
-    notes = notes + ([hook_note] if "removed" in hook_note else [])
+    notes = notes + ([hook_note] if "nothing to remove" not in hook_note else [])
+    templates_note = mesh_files.remove_templates(paths)
+    notes = notes + ([templates_note] if templates_note else [])
     for note in notes or ["nothing to restore"]:
         print(f"• {note}")
     app = paths.home / ".local" / "share" / "moshi-cockpit"

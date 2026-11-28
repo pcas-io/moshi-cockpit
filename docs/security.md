@@ -232,12 +232,16 @@ agent's terminal. The rules every agent gets tell it to ring through `moshi-cock
 
 ## Skill, templates and the Claude Code hook
 
-- The `agent-mesh` skill and the agents' hc templates are written through the backup store; `uninstall` removes
-  them. A template file of the same name that moshi-cockpit did not write is never overwritten or removed. A
-  template only starts `moshi-cockpit run <agent>`, so a helper started from it gets the agent's own identity
+- The `agent-mesh` skill is written through the backup store; `uninstall` removes it.
+- The agents' hc templates are not in the backup store, because uninstall would then delete a file you have
+  since taken over. A template counts as moshi-cockpit's only while its frontmatter still carries the mark and
+  starts `moshi-cockpit run`; only such a file is overwritten, removed with its agent, or removed by `uninstall`.
+  A template only starts `moshi-cockpit run <agent>`, so a helper started from it gets the agent's own identity
   and the same approvals as any start through `run`.
-- The SessionStart hook is one entry in `~/.claude/settings.json`. That file changes often, so it is not
-  restored as a whole: install adds the entry, uninstall removes exactly that entry. The hook only reads the
+- The SessionStart hook is one entry in `~/.claude/settings.json` (matcher `startup`). That file changes often,
+  so it is not restored as a whole: install adds the entry, uninstall removes exactly our hook command. The file
+  behind a link is changed and the link stays; it is read and written as UTF-8 with its own indentation; a file
+  that changed between reading and writing is left alone with a note. The hook only reads the
   cockpit's config and the environment, prints a warning for a session without `MESH_MOSHI_TOKEN`, blocks
   nothing and exits 0 on any error. It informs and forbids nothing: whether such sessions may still use an
   account connector that several sessions share is yours to decide, by switching that connector off.

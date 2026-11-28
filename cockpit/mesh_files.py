@@ -4,13 +4,16 @@ and one herdr-core template per agent.
 The skill goes to `~/.agents/skills/agent-mesh/` (read by agent CLIs that look there) with a link from
 `~/.claude/skills/` when Claude Code is set up. A template is named after its agent and starts it through
 `moshi-cockpit run`, so `hc run --bg --name job <agent> "Moshi <id> — …"` starts a helper with its own identity,
-label and doorbell. Every write goes through the backup store; a template file that moshi-cockpit did not write
-is never overwritten.
+label and doorbell. The skill goes through the backup store. Templates do not: uninstall would delete a file the
+person has since taken over. A template counts as ours only while it still carries our mark and starts our
+`moshi-cockpit run`; only such a file is ever overwritten or removed.
 """
 
 from __future__ import annotations
 
+import os
 import shlex
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -56,17 +59,46 @@ def template_text(paths: Paths, name: str, harness: str) -> str:
     ]) + "\n"
 
 
-def ours(path: Path) -> bool:
+def ours(paths: Paths, path: Path) -> bool:
+    """Our mark in the description and our `moshi-cockpit run` as the command, both in the frontmatter."""
     try:
-        return TEMPLATE_MARK in path.read_text()[:500]
+        head = path.read_text(encoding="utf-8")[:1000]
     except (OSError, UnicodeDecodeError):
         return False
+    front = head.split("\n---", 1)[0] if head.startswith("---\n") else ""
+    command = f"command: {shlex.quote(str(paths.local_bin / 'moshi-cockpit'))} run "
+    return f"{TEMPLATE_MARK}." in front and f"\n{command}" in front
+
+
+def _write(target: Path, text: str) -> bool:
+    if target.is_file() and target.read_text(encoding="utf-8") == text:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".moshi-cockpit")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return True
+
+
+def remove_templates(paths: Paths) -> str:
+    """uninstall: every template that is still ours; the person's own stay."""
+    folder = templates_dir(paths)
+    gone = [p for p in sorted(folder.glob("*.md")) if ours(paths, p)] if folder.is_dir() else []
+    for path in gone:
+        path.unlink()
+    return f"hc templates removed: {', '.join(p.stem for p in gone)}" if gone else ""
 
 
 def remove_template(paths: Paths, name: str) -> None:
     """The template of an agent that left this machine; only one moshi-cockpit wrote."""
     target = templates_dir(paths) / f"{name}.md"
-    if target.is_file() and ours(target):
+    if target.is_file() and ours(paths, target):
         target.unlink()
 
 
@@ -78,10 +110,10 @@ def sync_templates(paths: Paths, backup: BackupStore, agents: Optional[list] = N
     kept: List[str] = []
     for agent in agents:
         target = templates_dir(paths) / f"{agent.name}.md"
-        if target.exists() and not ours(target):
+        if target.exists() and not ours(paths, target):
             kept.append(agent.name)
             continue
-        if backup.write_text(target, template_text(paths, agent.name, agent.harness)):
+        if _write(target, template_text(paths, agent.name, agent.harness)):
             written.append(agent.name)
     note = "hc templates: " + (", ".join(written) if written else "unchanged")
     if kept:

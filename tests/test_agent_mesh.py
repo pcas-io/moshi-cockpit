@@ -72,6 +72,25 @@ class TemplateTest(unittest.TestCase):
         mesh_files.remove_template(self.paths, "scout")
         self.assertTrue(own.exists())  # not ours to remove
 
+    def test_a_template_that_only_mentions_our_mark_is_not_ours(self):
+        own = mesh_files.templates_dir(self.paths) / "scout.md"
+        own.parent.mkdir(parents=True)
+        text = f"---\ndescription: copied, {mesh_files.TEMPLATE_MARK}.\ncommand: claude\n---\nmine\n"
+        own.write_text(text)
+        mesh_files.sync_templates(self.paths, self.backup, self.agents)
+        self.assertEqual(own.read_text(), text)
+
+    def test_uninstall_removes_our_templates_and_keeps_one_the_person_took_over(self):
+        mesh_files.sync_templates(self.paths, self.backup, self.agents)
+        taken = mesh_files.templates_dir(self.paths) / "helper.md"
+        taken.write_text(taken.read_text().replace(mesh_files.TEMPLATE_MARK, "my own helper"))
+        mine = mesh_files.templates_dir(self.paths) / "claude.md"
+        mine.write_text("---\ncommand: claude\n---\n")
+        self.assertEqual(mesh_files.remove_templates(self.paths), "hc templates removed: scout")
+        self.assertEqual(sorted(p.name for p in mesh_files.templates_dir(self.paths).iterdir()), ["claude.md", "helper.md"])
+        self.backup.restore_all()  # templates never were in the backup store
+        self.assertTrue(taken.exists() and mine.exists())
+
     def test_removing_an_agent_removes_its_template(self):
         mesh_files.sync_templates(self.paths, self.backup, self.agents)
         mesh_files.remove_template(self.paths, "scout")
@@ -96,6 +115,7 @@ class HookFileTest(unittest.TestCase):
         entries = self.entries()
         self.assertEqual(entries[0], PERSON_SETTINGS["hooks"]["SessionStart"][0])
         self.assertEqual(entries[1]["hooks"][0]["command"], f"{self.paths.local_bin / 'moshi-cockpit'} hook session-start")
+        self.assertEqual(entries[1]["matcher"], "startup")  # once per session, not on resume or compact
         self.assertEqual(len(entries), 2)
         data = json.loads(self.settings.read_text())
         self.assertEqual((data["model"], data["hooks"]["Stop"]), ("opus", PERSON_SETTINGS["hooks"]["Stop"]))
@@ -112,9 +132,51 @@ class HookFileTest(unittest.TestCase):
         self.assertEqual(after["hooks"], PERSON_SETTINGS["hooks"])
         self.assertEqual(claude_hook.remove(self.paths), "Claude Code hook: nothing to remove")
 
+    def test_a_dotfiles_link_stays_a_link(self):
+        real = self.paths.home / "dotfiles" / "settings.json"
+        real.parent.mkdir()
+        real.write_text(self.original)
+        self.settings.unlink()
+        self.settings.symlink_to(real)
+        claude_hook.ensure(self.paths)
+        self.assertTrue(self.settings.is_symlink())
+        self.assertIn("hook session-start", real.read_text())
+        claude_hook.remove(self.paths)
+        self.assertTrue(self.settings.is_symlink())
+        self.assertEqual(json.loads(real.read_text()), PERSON_SETTINGS)
+
+    def test_the_files_own_layout_is_kept(self):
+        for layout, indent in ((json.dumps(PERSON_SETTINGS, indent=4) + "\n", "    "),
+                               (json.dumps(PERSON_SETTINGS, indent="\t") + "\n", "\t")):
+            with self.subTest(indent=repr(indent)):
+                self.settings.write_text(layout)
+                claude_hook.ensure(self.paths)
+                text = self.settings.read_text()
+                self.assertIn(f'\n{indent}"model"', text)
+                self.assertTrue(text.endswith("}\n"))
+                claude_hook.remove(self.paths)
+                self.assertEqual(self.settings.read_text(), layout)
+
+    def test_a_file_that_changes_while_it_is_written_is_left_alone(self):
+        first = claude_hook._stamp(self.settings)
+        stamps = iter([first, (1, 1)])  # read, then someone else wrote before our replace
+        with mock.patch.object(claude_hook, "_stamp", side_effect=lambda path: next(stamps)):
+            self.assertIn("changed while it was read", claude_hook.ensure(self.paths))
+        self.assertEqual(self.settings.read_text(), self.original)
+        self.assertEqual([p.name for p in self.settings.parent.iterdir()], ["settings.json"])  # no temp file left
+
+    def test_uninstall_keeps_another_hook_that_shares_our_entry(self):
+        claude_hook.ensure(self.paths)
+        data = json.loads(self.settings.read_text())
+        data["hooks"]["SessionStart"][1]["hooks"].append({"type": "command", "command": "theirs"})
+        self.settings.write_text(json.dumps(data, indent=2) + "\n")
+        claude_hook.remove(self.paths)
+        entries = self.entries()
+        self.assertEqual(entries[1]["hooks"], [{"type": "command", "command": "theirs"}])
+
     def test_a_file_that_is_not_json_is_left_alone(self):
         self.settings.write_text("{ broken")
-        self.assertIn("not valid JSON", claude_hook.ensure(self.paths))
+        self.assertIn("not a valid JSON object", claude_hook.ensure(self.paths))
         self.assertEqual(self.settings.read_text(), "{ broken")
 
     def test_without_claude_code_nothing_is_written(self):
