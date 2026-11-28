@@ -17,7 +17,9 @@ PERSON = '[ui]\npermission_mode = "default"\n\n[mcp_servers.linear]\nurl = "http
 class BlockTest(unittest.TestCase):
     def test_the_block_names_the_variable_never_a_token(self):
         block = moshi_block(MOSHI)
-        self.assertIn('headers = { "Authorization" = "Bearer ${MESH_MOSHI_TOKEN}" }', block)
+        self.assertIn('headers = { "Authorization" = "${MESH_GROK_MOSHI_AUTH:-}" }', block)
+        self.assertNotIn("MESH_MOSHI_TOKEN", block)  # every agent carries that one; its children would inherit it
+        self.assertNotIn("Bearer", block)  # no token, no Bearer: an empty header counts nothing at moshi
         self.assertIn(f'url = "{MOSHI}"', block)
         self.assertTrue(block.startswith(BEGIN) and block.rstrip().endswith(END))
 

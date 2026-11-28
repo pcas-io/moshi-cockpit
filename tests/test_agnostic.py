@@ -235,6 +235,11 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
         self.assertNotIn("--mcp-config", seen["argv"])
         self.assertIn("--settings", seen["argv"])
 
+    def test_other_agents_never_carry_the_grok_header(self):
+        ctx, _ = self.ctx()  # a grok another agent starts from its shell must not speak as that agent
+        seen = start(ctx, "writer", ["task"], environ={"PATH": "/usr/bin", "MESH_GROK_MOSHI_AUTH": "Bearer x"})
+        self.assertNotIn("MESH_GROK_MOSHI_AUTH", seen["env"])
+
     def test_grok_without_its_own_token_does_not_start(self):
         ctx, _ = self.ctx()
         with self.assertRaises(ValueError) as caught:
@@ -245,7 +250,8 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
         ctx, _ = context(self, {("moshi-g1", "g1"): OWN})
         configure(ctx.paths, agents=[{"name": "g1", "harness": "grok"}])
         seen = start(ctx, "g1", ["task"])
-        self.assertEqual(seen["env"]["MESH_MOSHI_TOKEN"], OWN)
+        self.assertEqual(seen["env"]["MESH_MOSHI_TOKEN"], OWN)  # for moshi-cockpit ring
+        self.assertEqual(seen["env"]["MESH_GROK_MOSHI_AUTH"], f"Bearer {OWN}")  # what grok's config reads
         self.assertNotIn(OWN, " ".join(seen["argv"]))
         self.assertNotIn("--mcp-config", seen["argv"])  # grok reads its server from ~/.grok/config.toml
         self.assertEqual(seen["argv"][1:3], ["--permission-mode", "default"])

@@ -77,9 +77,9 @@ and **Machines** (see [Machines](#machines)):
 
 - **New:** a name (letters, digits, `_` and `-`), a harness, and optionally a role and an ocellio skill the
   agent loads at its start. Harnesses are `claude`, `codex`, `vibe`, `agy` and `grok`. A `grok` agent gets its
-  own moshi identity: `install` writes one marked moshi entry into `~/.grok/config.toml` whose header names the
-  token variable, and `run` sets that variable to the agent's own token. Your grok login stays as it is, and a
-  plain `grok` start has no moshi identity. A harness
+  own moshi identity: `install` writes one marked moshi entry into `~/.grok/config.toml` whose Authorization
+  header is only a variable, and `run` sets that variable for the agent. Your grok login stays as it is, and a
+  plain `grok` start, also one another agent starts, has no moshi identity. A harness
   that `moshi-cockpit` does not find is greyed out with an **Install** button; if Herdr finds it but
   `moshi-cockpit` does not, the note says "found by Herdr, not on moshi-cockpit's PATH". Install opens a tab
   that shows the vendor's own installer command, runs it only after you type yes, and waits for Enter at the

@@ -1,8 +1,16 @@
 """grok (xAI's CLI): each agent has its own moshi identity, like claude. grok reads one global config
-(`~/.grok/config.toml`), where the login lives too, so the moshi server is written there once, with a header
-that names the token variable instead of a token: grok expands `${VAR}` in `[mcp_servers.*]` headers when it
-loads the config. `moshi-cockpit run` puts the agent's own token into that variable; a plain `grok` start has
-none and gets no moshi identity. The person's grok login (`grok login`) stays as it is.
+(`~/.grok/config.toml`), where the login lives too, so the moshi server is written there once, with an
+Authorization header that is nothing but a variable: grok expands `${VAR:-}` in `[mcp_servers.*]` headers when
+it loads the config. `moshi-cockpit run` sets that variable to `Bearer <the agent's own token>`; a plain `grok`
+start has none, sends an empty header and gets no moshi identity. The person's grok login stays as it is.
+
+Two details are deliberate:
+- The variable is grok's own (GROK_AUTH_ENV), not the MESH_MOSHI_TOKEN every agent carries. A grok that another
+  agent starts from its shell inherits that agent's environment; with the shared name it would speak in moshi as
+  that agent. A grok started by a grok agent still inherits the grok variable and acts as that same agent.
+- The whole header comes from the variable, with an empty default. A `Bearer ${TOKEN}` header would send
+  `Bearer ` or the literal placeholder without a token, and moshi counts every wrong Bearer of an address
+  towards its sign-in throttle, the dashboard's included. An empty header is no credential and counts nothing.
 
 The block is marked, written through the backup store (uninstall restores the file) and replaced as a whole.
 A `[mcp_servers.moshi]` the person wrote outside the block is left alone and reported: a second table of the
@@ -13,13 +21,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List
+from typing import Dict, List, Sequence, Tuple
 
 from cockpit.approvals import grok_findings
 from cockpit.harnesses.base import TOKEN_ENV, Ctx, Harness
 from cockpit.policy import MOSHI_ALWAYS
 from cockpit.registry import Agent
 
+GROK_AUTH_ENV = "MESH_GROK_MOSHI_AUTH"  # "Bearer <token>", set only by `moshi-cockpit run` for a grok agent
 BEGIN = "# >>> moshi-cockpit: moshi for grok agents started with `moshi-cockpit run` (own token from the environment)"
 END = "# <<< moshi-cockpit"
 _BLOCK = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", re.S)
@@ -30,7 +39,7 @@ FOREIGN_FINDING = ("~/.grok/config.toml already has its own [mcp_servers.moshi];
 
 def moshi_block(url: str) -> str:
     return "\n".join([BEGIN, "[mcp_servers.moshi]", f"url = {json.dumps(url)}",
-                      'headers = { "Authorization" = "Bearer ${' + TOKEN_ENV["moshi"] + '}" }', END]) + "\n"
+                      'headers = { "Authorization" = "${' + GROK_AUTH_ENV + ':-}" }', END]) + "\n"
 
 
 def without_block(text: str) -> str:
@@ -64,6 +73,13 @@ class Grok(Harness):
         if ctx.backup.write_text(path, with_block(current, ctx.config.servers["moshi"]), mode=0o600):
             return [str(path)]
         return []
+
+    def command(self, ctx: Ctx, agent: Agent, extra: Sequence[str]) -> Tuple[List[str], Dict[str, str]]:
+        """The header under grok's own name for its config; MESH_MOSHI_TOKEN stays for `moshi-cockpit ring`."""
+        argv, env = super().command(ctx, agent, extra)
+        if TOKEN_ENV["moshi"] in env:
+            env[GROK_AUTH_ENV] = f"Bearer {env[TOKEN_ENV['moshi']]}"
+        return argv, env
 
     def args(self, ctx: Ctx, agent: Agent) -> List[str]:
         allowed: List[str] = []
