@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from cockpit import agents_remote, defaults, registry
+from cockpit import agents_remote, defaults, mesh_files, registry
 from cockpit.agents import AgentContext
 from cockpit.config import load_config
 from cockpit.moshi_api import MoshiApi, MoshiError
@@ -36,6 +36,7 @@ def remove_agent(ctx: AgentContext, name: str, api: Optional[MoshiApi] = None) -
             notes.append(f"Keychain entry {service} deleted")
     registry.remove(ctx.paths, ctx.backup, target.name)
     defaults.sync_agent_menu(ctx.paths, ctx.backup)
+    mesh_files.remove_template(ctx.paths, target.name)
     notes.append(f"{target.name} removed from this Mac")
     return notes, [warning] if warning else []
 

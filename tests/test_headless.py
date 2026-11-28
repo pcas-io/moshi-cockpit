@@ -57,7 +57,8 @@ class InstallTest(unittest.TestCase):
         installer.run(ctx, installer.InstallOptions(moshi=MOSHI), runner=no_runner)
         notes = installer.run(ctx, installer.InstallOptions(moshi=MOSHI), runner=no_runner)
         self.assertEqual(notes, [installer.HEADLESS_NOTE, f"Servers: moshi {MOSHI}, unchanged",
-                                 "Launchers linked: unchanged"])
+                                 "Launchers linked: unchanged", "Skill agent-mesh: unchanged",
+                                 "hc templates: unchanged", "Claude Code hook: Claude Code is not set up here"])
 
 
 class UninstallTest(unittest.TestCase):

@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from cockpit import agents, compat, defaults, legacy
+from cockpit import agents, claude_hook, compat, defaults, legacy, mesh_files
 from cockpit.agents import AgentContext
 from cockpit.config import SERVERS, _read, load_config, origin, save_servers, validate_url, with_default_path
 from cockpit.defaults import load_json
@@ -208,6 +208,7 @@ def run(ctx: AgentContext, options: InstallOptions, runner: Runner = subprocess.
     notes.extend(_save_servers(ctx, options))
     notes.extend(migrate(ctx))
     notes.extend(setup_agents(ctx))
+    notes.extend(_mesh_notes(ctx))
     if first_start:
         notes.append(show_cockpit_layout(ctx.paths, runner) if ready else HERDR_NOT_READY)
     if moved:
@@ -221,7 +222,15 @@ def _run_headless(ctx: AgentContext, options: InstallOptions) -> List[str]:
     notes.extend(_save_servers(ctx, options))
     notes.append(_link_launchers(ctx))
     notes.extend(setup_agents(ctx))
+    notes.extend(_mesh_notes(ctx))
     return notes
+
+
+def _mesh_notes(ctx: AgentContext) -> List[str]:
+    """What agents need to find and reach each other: the agent-mesh skill, a template per agent, the warning in
+    Claude sessions started without an identity."""
+    return [mesh_files.install_skill(ctx.paths, ctx.backup), mesh_files.sync_templates(ctx.paths, ctx.backup),
+            claude_hook.ensure(ctx.paths)]
 
 
 def _link_launchers(ctx: AgentContext) -> str:

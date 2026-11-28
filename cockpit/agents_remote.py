@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple
 
-from cockpit import agents, defaults, registry
+from cockpit import agents, defaults, mesh_files, registry
 from cockpit.agents import AgentContext
 from cockpit.config import Config, load_config, origin, require
 from cockpit.connect import DEVICE_ENTRY, OCELLIO_ENTRY, approval_valid
@@ -209,6 +209,7 @@ def _discard(api: MoshiApi, token: str) -> None:
 
 def _finish(ctx: AgentContext, agent: Agent) -> Agent:
     defaults.sync_agent_menu(ctx.paths, ctx.backup)
+    mesh_files.sync_templates(ctx.paths, ctx.backup)
     if not HARNESSES[agent.harness].missing_tokens(agents.harness_ctx(ctx), agent):
         agents.setup(ctx, agent)  # vibe and agy keep their rules in a file
     return agent

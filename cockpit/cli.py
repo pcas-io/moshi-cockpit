@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
 from cockpit import agents as agent_files
 from cockpit import __version__, agents_remote, connect, doctor, harness_install, hostkeys, hosts, installer, launch, legacy, machines, registry, remote, removal, ring, roster, sessions, status, targets, wizard
+from cockpit import claude_hook
 from cockpit import hc as hc_mod
 from cockpit.agents import AgentContext
 from cockpit.agents_remote import ApprovalRequired
@@ -60,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     rng.add_argument("message_id", nargs="?", help="the moshi message id (msg_…)")
     rng.add_argument("--without-record", metavar="TEXT", help="only while moshi is down: paste TEXT itself, "
                      "marked [no-record]; record it in moshi once it is back")
+    hk = sub.add_parser("hook", help="for Claude Code's hooks (install sets them up)")
+    hk.add_argument("event", choices=["session-start"])
     con = sub.add_parser("connect", help="connect this Herdr to moshi with one approval in the browser")
     con.add_argument("--label", help="the installation's name in moshi (default: this machine's host name)")
     sub.add_parser("migrate", help="move the agents of an earlier setup to this installation (after connect)")
@@ -222,6 +226,8 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
     """Undoes every change outside the person's own settings folder; that folder and the tokens stay."""
     settings = paths.mesh_config.parent
     notes = BackupStore(paths.state).restore_all(keep=settings)
+    hook_note = claude_hook.remove(paths)
+    notes = notes + ([hook_note] if "removed" in hook_note else [])
     for note in notes or ["nothing to restore"]:
         print(f"• {note}")
     app = paths.home / ".local" / "share" / "moshi-cockpit"
@@ -303,6 +309,15 @@ def cmd_ring(args: argparse.Namespace, paths: Paths) -> int:
     else:
         address = ring.ring(paths, args.agent, args.message_id, hc)
     print(f"rang {clean(args.agent, '?', limit=64)} in {address}")
+    return 0
+
+
+def cmd_hook(args: argparse.Namespace, paths: Paths) -> int:
+    """Never fails a Claude session: any error means no output and exit code 0."""
+    try:
+        print(claude_hook.session_start(os.environ, load_config(paths).has("moshi")), end="")
+    except Exception:  # noqa: BLE001 (a hook must not break the session it runs in)
+        pass
     return 0
 
 
@@ -593,7 +608,7 @@ def _machine_add(args: argparse.Namespace, paths: Paths) -> int:
 COMMANDS = {"install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor, "status": cmd_status,
             "run": cmd_run, "sessions": cmd_sessions, "agent": cmd_agent, "rules": cmd_rules, "connect": cmd_connect,
             "harness": cmd_harness, "migrate": cmd_migrate, "machine": cmd_machine, "roster": cmd_roster,
-            "ring": cmd_ring}
+            "ring": cmd_ring, "hook": cmd_hook}
 
 
 # What a command ends with on a known failure: one line on stderr and an exit code, never a traceback.

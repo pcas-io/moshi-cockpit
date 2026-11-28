@@ -230,6 +230,18 @@ address as `COCKPIT_HC_ADDRESS` instead. This is hygiene, not a boundary: hc rea
 socket without those variables, and any process of your user can call it, including `hc keys` into another
 agent's terminal. The rules every agent gets tell it to ring through `moshi-cockpit ring` and nothing else.
 
+## Skill, templates and the Claude Code hook
+
+- The `agent-mesh` skill and the agents' hc templates are written through the backup store; `uninstall` removes
+  them. A template file of the same name that moshi-cockpit did not write is never overwritten or removed. A
+  template only starts `moshi-cockpit run <agent>`, so a helper started from it gets the agent's own identity
+  and the same approvals as any start through `run`.
+- The SessionStart hook is one entry in `~/.claude/settings.json`. That file changes often, so it is not
+  restored as a whole: install adds the entry, uninstall removes exactly that entry. The hook only reads the
+  cockpit's config and the environment, prints a warning for a session without `MESH_MOSHI_TOKEN`, blocks
+  nothing and exits 0 on any error. It informs and forbids nothing: whether such sessions may still use an
+  account connector that several sessions share is yours to decide, by switching that connector off.
+
 ## Pins and groups
 
 The cockpit layout's spaces list keeps pins and groups in Herdr's shared store (space ids and your group
