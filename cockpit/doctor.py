@@ -146,7 +146,7 @@ def check_identities(ctx: DoctorContext) -> List[Check]:
 
 
 def check_rules(ctx: DoctorContext) -> List[Check]:
-    """Own rules reach an agent at its start (AGENTS.md, start instructions, system prompt); grok not yet."""
+    """Own rules reach an agent at its start (AGENTS.md, start instructions, system prompt, grok's --rules)."""
     config, error = _config(ctx)
     registered, _ = _agents(ctx)
     if error or not config.rules:

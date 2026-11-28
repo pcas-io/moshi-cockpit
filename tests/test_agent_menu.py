@@ -22,7 +22,7 @@ class AgentMenuTest(unittest.TestCase):  # one entry per agent in herdr's "+" me
         from cockpit import defaults
         return defaults.sync_agent_menu(ctx.paths, ctx.backup)
 
-    def test_every_agent_gets_a_start_entry_and_grok_says_it_has_no_own_moshi(self):
+    def test_every_agent_gets_a_start_entry_grok_included(self):
         ctx, target = self.ctx([{"name": "claude-code", "harness": "claude"}, {"name": "g1", "harness": "grok"},
                                 {"name": "v1", "harness": "vibe"}])
         self.sync(ctx)
@@ -31,7 +31,7 @@ class AgentMenuTest(unittest.TestCase):  # one entry per agent in herdr's "+" me
         self.assertEqual(entry["name"], "claude-code")
         self.assertEqual(entry["run"], [str(ctx.paths.local_bin / "moshi-cockpit"), "run", "claude-code"])
         self.assertEqual(entry["icon"], "icons/claude.svg")
-        self.assertEqual(programs["moshi-cockpit-g1"]["name"], "g1 (no moshi identity of its own)")
+        self.assertEqual(programs["moshi-cockpit-g1"]["name"], "g1")  # grok has its own identity now
         self.assertNotIn("icon", programs["moshi-cockpit-v1"])  # the package ships no images
 
     def test_without_moshi_nothing_is_marked_and_no_token_is_ever_written(self):
@@ -178,7 +178,7 @@ class OwnMenuTest(unittest.TestCase):  # the "+" menu of the cockpit layout, in 
             self.assertEqual(cli.main(["agent", "list", "--json"]), 0)
         data = json.loads(out.getvalue())
         state = {a["name"]: (a["native"], a["connected"]) for a in data["agents"]}
-        self.assertEqual(state, {"c1": (True, True), "c2": (True, False), "g1": (False, False)})
+        self.assertEqual(state, {"c1": (True, True), "c2": (True, False), "g1": (True, False)})
         self.assertEqual({a["name"]: a["has_moshi_token"] for a in data["agents"]}, {"c1": True, "c2": False, "g1": False})
         self.assertNotIn(OWN, out.getvalue())
         self.assertFalse(any("-w" in args for args, _ in fake.calls))

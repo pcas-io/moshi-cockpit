@@ -244,7 +244,7 @@ class RemoteAgentsTest(ConnectedHerdr, unittest.TestCase):
             {"name": "away", "harness": "vibe", "role": "Reviews", "skill": "skill-r", "active_installation": "Home Mac",
              "harness_installed": True, "loadable": True, "reason": ""},
             {"name": "idle", "harness": "grok", "role": "", "skill": "", "active_installation": None,
-             "harness_installed": False, "loadable": False, "reason": "grok cannot run agents of its own"}])
+             "harness_installed": False, "loadable": True, "reason": ""}])
         self.assertEqual(self.moshi.calls("GET", "/api/installation/status")[0]["auth"], f"Bearer {self.device_key}")
 
     def test_catalog_lists_agents_that_cannot_load_here_with_the_reason(self):
