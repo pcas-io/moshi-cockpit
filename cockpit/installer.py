@@ -229,8 +229,8 @@ def _run_headless(ctx: AgentContext, options: InstallOptions) -> List[str]:
 def _mesh_notes(ctx: AgentContext) -> List[str]:
     """What agents need to find and reach each other: the agent-mesh skill, a template per agent, the warning in
     Claude sessions started without an identity."""
-    return [mesh_files.install_skill(ctx.paths, ctx.backup), mesh_files.sync_templates(ctx.paths, ctx.backup),
-            claude_hook.ensure(ctx.paths)]
+    return [*(mesh_files.install_skill(ctx.paths, ctx.backup, skill) for skill in mesh_files.SKILLS),
+            mesh_files.sync_templates(ctx.paths, ctx.backup), claude_hook.ensure(ctx.paths)]
 
 
 def _link_launchers(ctx: AgentContext) -> str:

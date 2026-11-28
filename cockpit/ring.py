@@ -107,7 +107,7 @@ def ring(paths: Paths, name: str, message_id: str, hc: Hc, environ: Mapping[str,
     message = fetch(config.servers["moshi"], token, message_id)
     if str(message.get("to") or "").lower() != name.lower():
         raise ValueError(f"{message_id} is not addressed to {clean(name, '?', limit=64)}")
-    return _paste(hc, name, doorbell(message_id, message))
+    return paste(hc, name, doorbell(message_id, message))
 
 
 Probe = Callable[[str], Any]
@@ -122,10 +122,10 @@ def ring_without_record(paths: Paths, name: str, text: str, hc: Hc,
     config = load_config(paths)
     if config.has("moshi") and _answers(probe, config.servers["moshi"]):
         raise ValueError("moshi is reachable: send the message through moshi, then ring with its id")
-    return _paste(hc, name, f"{NO_RECORD} {line}")
+    return paste(hc, name, f"{NO_RECORD} {line}")
 
 
-def _paste(hc: Hc, name: str, line: str) -> str:
+def paste(hc: Hc, name: str, line: str) -> str:
     """Pastes `line` into the one terminal that runs `name`, found from hc alone (presence plays no part), and
     checks that terminal once more right before the paste: the agent may have ended since the list."""
     here = roster_mod.build(hc.terminals(), {}, Mesh(), roster_mod.MOSHI_OFF, "")
