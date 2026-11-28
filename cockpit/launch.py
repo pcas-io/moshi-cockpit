@@ -22,7 +22,9 @@ from cockpit import agents_remote, status
 from cockpit.config import load_config
 from cockpit.harnesses import HARNESSES, Ctx
 from cockpit.harnesses.base import DROPPED_ENV, DROPPED_ENV_PREFIXES, TOKEN_ENV_PREFIXES
+from cockpit.hc import AGENT_LABEL, Hc, HcError, find_binary
 from cockpit.moshi_api import MoshiApi, MoshiError
+from cockpit.roster import machine_name
 from cockpit.secrets import SecretStore
 from cockpit.paths import Paths, keychain_service
 from cockpit.registry import find
@@ -31,6 +33,8 @@ from cockpit.tokens import moshi_token
 Exec = Callable[[str, List[str], dict], None]
 SHELLS = ("zsh", "bash")
 RUN_MARKER = "MOSHI_COCKPIT_RUN"
+HC_TERMINAL = "HC_TERMINAL_ID"  # herdr-core's address of the terminal this start runs in
+HC_ADDRESS = "COCKPIT_HC_ADDRESS"  # what the agent gets instead: survives the hygiene that drops HC_*
 UNREACHABLE = "moshi is not reachable; starting without the mesh."
 TAKEN_IN_BETWEEN = "{name} was held by {label} until just now: it was started there after the check, and runs here now."
 
@@ -127,12 +131,31 @@ def prepare(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str]
     if not binary:
         raise ValueError(NOT_FOUND.format(binary=harness.binary))
     env = agent_env(environ, extra_env, harness.clean_env)
+    terminal = environ.get(HC_TERMINAL, "")
+    if terminal:  # where the agent can be rung; it reports this in working_on (presence rule)
+        env[HC_ADDRESS] = f"{terminal}@{machine_name()}"
     shell = interactive_shell(environ) if harness.shell_start and on_terminal() else None
     if shell:
         # Arguments stay positional ("$@"): nothing a person typed is ever parsed by the shell. The marker
         # tells a wrapper that these arguments are ours, so it may still ask what it asks at a plain start.
         return Start(shell, [shell, "-ic", f'{harness.binary} "$@"', harness.binary, *argv[1:]], {**env, RUN_MARKER: "1"})
     return Start(binary, list(argv), env)
+
+
+def label_terminal(paths: Paths, name: str, environ: Mapping[str, str] = os.environ,
+                   hc_for: Optional[Callable[[str], Hc]] = None, warn: Callable[[str], None] = _warn) -> None:
+    """Labels this terminal `agent=<name>` in herdr-core, so the roster knows who runs here and `ring` can reach
+    the agent. Outside a herdr-core terminal, or without hc, nothing happens; an hc error is one warning, the
+    start goes on."""
+    terminal = environ.get(HC_TERMINAL, "")
+    on_path = lambda program: shutil.which(program, path=environ.get("PATH", ""))  # noqa: E731 (the start's PATH)
+    binary = find_binary(paths, which=on_path) if terminal else None
+    if not binary:
+        return
+    try:
+        (hc_for or Hc)(binary).label(terminal, AGENT_LABEL, find(paths, name).name)
+    except HcError as exc:
+        warn(f"{exc}; other agents cannot ring {name} here.")
 
 
 def execute(start: Start, execve: Optional[Exec] = None) -> None:
@@ -142,4 +165,6 @@ def execute(start: Start, execve: Optional[Exec] = None) -> None:
 def run_agent(paths: Paths, keychain: SecretStore, name: str, extra: Sequence[str],
               execve: Exec = os.execve, environ: Mapping[str, str] = os.environ,
               on_terminal: Callable[[], bool] = _on_terminal) -> None:
-    execute(prepare(paths, keychain, name, extra, environ, on_terminal), execve)
+    start = prepare(paths, keychain, name, extra, environ, on_terminal)
+    label_terminal(paths, name, environ)
+    execute(start, execve)
