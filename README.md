@@ -220,6 +220,20 @@ waits for Enter so you can read why. See [docs/security.md](docs/security.md) fo
 If moshi cannot be reached when you start an agent, the agent still starts locally with one warning line,
 and activation is skipped.
 
+## Agents working together
+
+`install` puts three things in place so that agents on this machine find and reach each other:
+
+- **The `agent-mesh` skill** in `~/.agents/skills/agent-mesh/` (linked from `~/.claude/skills/`). It tells an
+  agent how to find the others (`roster --json`), hand over a task or a result through moshi, wake the recipient
+  with `ring`, keep what must last in ocellio, and what to do when moshi or ocellio is down.
+- **One herdr-core template per agent** in `~/.config/herdr-core/templates/<agent>.md`, which starts that agent
+  through `run`. Delegating is then `hc run --bg --name review <agent> "Moshi <id> — <one sentence>"`: the
+  helper starts with its own identity and gets the doorbell as its first message. A template of the same name
+  that you wrote yourself stays as it is.
+- **A SessionStart hook for Claude Code** that warns once in a session started without `run`, because such a
+  session has no moshi identity of its own.
+
 ## Command line
 
 `moshi-cockpit [--version] <command>`. Output never contains a token.
@@ -234,6 +248,7 @@ and activation is skipped.
 | `roster [--json]` | Who runs where on this machine: agents in herdr-core terminals with their status and moshi presence, your agents that are not started, and agent terminals without a name (started without `run`). Agents read `--json` to find each other. |
 | `ring AGENT MESSAGE_ID` | Wake an agent on this machine for a message you sent it through moshi. Checks with your agent's own token that the message exists and is addressed to AGENT, then pastes one line, `Moshi <id> — <type> from <sender>`, into the terminal the roster names. Only from an agent started with `run`. |
 | `ring AGENT --without-record TEXT` | Only while moshi does not answer: pastes `[no-record] TEXT` instead. Record the message in moshi once it is back. Refused while moshi answers. |
+| `hook session-start` | For Claude Code's SessionStart hook, which `install` sets up: in a session started without `run` it says once that the session has no moshi identity of its own. Prints nothing otherwise, never fails. |
 | `doctor [--json] [--quiet]` | Check the setup. Exit code is not 0 on errors. `--quiet` prints nothing unless there is an error, then one sentence with one action. |
 | `status [--json]` | moshi mesh overview, read with this Herdr's device key. `--json` is compact output for the sidebar. |
 | `agent add [NAME] [--harness H] [--role TEXT] [--skill NAME]` | Create an agent (in moshi too, when set up). With a name and `--harness` it runs without a terminal; otherwise it asks. |
@@ -275,8 +290,10 @@ An interrupted command exits with `130`.
 moshi-cockpit uninstall
 ```
 
-restores every file the cockpit changed from its backups, including the link in `~/.local/bin`. A file whose
-backup is missing is left as it is and named in the output. What stays, so that a later install picks up where
+restores every file the cockpit changed from its backups, including the link in `~/.local/bin` and the
+`agent-mesh` skill. It removes the agents' hc templates that are still its own (not one you have changed), and
+from `~/.claude/settings.json` only its own SessionStart hook, so later changes to that file stay. A file whose backup is missing is left as it is and named
+in the output. What stays, so that a later install picks up where
 you left off:
 
 - your settings in `~/.config/moshi-cockpit/` (`config.json`, `agents.json`, `rules.md`),
