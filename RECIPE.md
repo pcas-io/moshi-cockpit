@@ -25,8 +25,7 @@ sidebar. The "+" menu is a copy of Herdr's own, with the installed agent CLIs an
   moshi** (agents in moshi that are not on this Mac, each with "Running on <label>" where that is so) and
   **Machines** (below).
   Harnesses that `moshi-cockpit` does not find are greyed out with an Install button ("found by Herdr, not on
-  moshi-cockpit's PATH" when only Herdr finds one); `grok` is not offered under New, it has no identity of its
-  own.
+  moshi-cockpit's PATH" when only Herdr finds one).
 - **Machines tab.** In the agents dialog's "+ Agent": this Mac and each Herdr machine with the six harnesses
   (`claude`, `codex`, `vibe`, `agy`, `grok`, `opencode`) as Ready, Installed, not signed in or Missing, with
   Install, Sign in and Refresh, and the hosts of `~/.ssh/config` with Add. "Where" in New starts an agent on

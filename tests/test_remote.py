@@ -258,7 +258,7 @@ class RemoteTest(unittest.TestCase):
 
     def test_agent_call_validates_before_any_call(self):
         runner = FakeRunner()
-        for options in (dict(name="bad name"), dict(name="-x"), dict(harness="grok"), dict(harness="nope"),
+        for options in (dict(name="bad name"), dict(name="-x"), dict(harness="nope"),
                         dict(role="a\nb"), dict(skill="s\x1b"), dict(role="r" * 65), dict(skill="-x"),
                         dict(skill="a b"), dict(skill="a;b")):
             with self.assertRaises(ValueError, msg=options):

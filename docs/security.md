@@ -89,6 +89,20 @@ off on its own. moshi accepts an agent's messages only from the installation tha
 `moshi-cockpit agent remove` ends this installation's token for the agent first and then deletes the local
 entries; if moshi cannot be told, the local removal still happens with a warning.
 
+grok reads one global config, `~/.grok/config.toml`, where its login lives too. `install` adds one marked
+block there (through the backup store, mode 0600) with the moshi server and the header
+`Authorization = "${MESH_GROK_MOSHI_AUTH:-}"`: grok expands the variable when it loads the config, so no token
+is written to the file. `run` sets it to `Bearer <the agent's own token>`, in the environment only.
+
+- The variable is grok's own. Every agent carries its token as `MESH_MOSHI_TOKEN`, and a program it starts
+  inherits it; with that name in grok's config, a grok started from another agent's shell would speak in moshi
+  as that agent. A grok started by a grok agent does inherit the grok variable and acts as that same agent.
+- Without the variable grok sends an empty header, not `Bearer ` or the placeholder: moshi counts every wrong
+  Bearer of an address towards its sign-in throttle, which would lock the dashboard's sign-in after a few plain
+  grok starts. An empty header is no credential.
+- A `[mcp_servers.moshi]` you wrote yourself is left alone and reported by `doctor`. `uninstall` restores the
+  file as it was.
+
 ## Takeover
 
 Starting an agent makes this installation its active one. If another installation holds it, the cockpit asks

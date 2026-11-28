@@ -235,11 +235,31 @@ class OwnMoshiIdentityTest(unittest.TestCase):  # one agent, one moshi identity,
         self.assertNotIn("--mcp-config", seen["argv"])
         self.assertIn("--settings", seen["argv"])
 
-    def test_grok_stays_without_a_token_and_without_the_claude_wiring(self):
+    def test_other_agents_never_carry_the_grok_header(self):
+        ctx, _ = self.ctx()  # a grok another agent starts from its shell must not speak as that agent
+        seen = start(ctx, "writer", ["task"], environ={"PATH": "/usr/bin", "MESH_GROK_MOSHI_AUTH": "Bearer x"})
+        self.assertNotIn("MESH_GROK_MOSHI_AUTH", seen["env"])
+
+    def test_grok_without_its_own_token_does_not_start(self):
         ctx, _ = self.ctx()
+        with self.assertRaises(ValueError) as caught:
+            start(ctx, "g1", ["task"])
+        self.assertIn("moshi-cockpit connect", str(caught.exception))
+
+    def test_grok_uses_its_own_token_from_the_environment_and_gets_rules_and_grants(self):
+        ctx, _ = context(self, {("moshi-g1", "g1"): OWN})
+        configure(ctx.paths, agents=[{"name": "g1", "harness": "grok"}])
         seen = start(ctx, "g1", ["task"])
-        self.assertNotIn("MESH_MOSHI_TOKEN", seen["env"])
-        self.assertNotIn("--mcp-config", seen["argv"])
+        self.assertEqual(seen["env"]["MESH_MOSHI_TOKEN"], OWN)  # for moshi-cockpit ring
+        self.assertEqual(seen["env"]["MESH_GROK_MOSHI_AUTH"], f"Bearer {OWN}")  # what grok's config reads
+        self.assertNotIn(OWN, " ".join(seen["argv"]))
+        self.assertNotIn("--mcp-config", seen["argv"])  # grok reads its server from ~/.grok/config.toml
+        self.assertEqual(seen["argv"][1:3], ["--permission-mode", "default"])
+        self.assertIn("MCPTool(moshi__mesh_send)", seen["argv"])
+        self.assertNotIn("MCPTool(moshi__mesh_webhook_set)", seen["argv"])  # that one asks
+        rules = seen["argv"][seen["argv"].index("--rules") + 1]
+        self.assertIn("your identity is `g1`", rules)
+        self.assertEqual(seen["argv"][-1], "task")
 
 
 class SingleAgyTest(unittest.TestCase):
@@ -442,13 +462,12 @@ class OwnRulesTest(unittest.TestCase):  # the person's data rule must persist
         self.assertEqual(self.ctx.paths.rules_file.read_text(), before)
         self.assertIn(self.RULE, self.ctx.paths.agy_agents_md.read_text())
 
-    def test_doctor_names_agents_the_rules_do_not_reach(self):
+    def test_doctor_says_the_rules_reach_every_agent_grok_included(self):
         configure(self.ctx.paths, agents=[{"name": "vibe", "harness": "vibe"}, {"name": "gr", "harness": "grok"}])
         config.save_rules(self.ctx.paths, self.ctx.backup, self.RULE)
         dctx = doctor.DoctorContext(paths=self.ctx.paths, keychain=self.ctx.keychain)
         rules = doctor.check_rules(dctx)[0]
-        self.assertEqual(rules.status, doctor.WARN)
-        self.assertIn("gr", rules.detail)
+        self.assertEqual(rules.status, doctor.OK)  # grok gets them with --rules
         config.save_rules(self.ctx.paths, self.ctx.backup, "")
         self.assertEqual(doctor.check_rules(dctx), [])
 

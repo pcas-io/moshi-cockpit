@@ -1,13 +1,12 @@
 """claude: each agent has its own moshi identity (one agent, one identity): its token is passed in the environment
 only, the server entry refers to it by name. ocellio stays as the CLI itself is set up (the person's token,
-ask-first model). grok: no per-agent wiring yet. Both start in a mode that asks, whatever their own config says."""
+ask-first model). It starts in a mode that asks, whatever its own config says. grok: see grok.py."""
 
 from __future__ import annotations
 
 import json
 from typing import List
 
-from cockpit.approvals import grok_findings
 from cockpit.harnesses.base import TOKEN_ENV, Ctx, Harness
 from cockpit.policy import MOSHI_ALWAYS
 from cockpit.registry import Agent
@@ -39,16 +38,3 @@ class Claude(Harness):
         return [*wiring, "--settings", json.dumps({"permissions": permissions}),
                 "--append-system-prompt", self.presence(ctx, agent)]
 
-
-class Grok(Harness):
-    name = "grok"
-    binary = "grok"
-    native_mesh = False  # own tokens need a per-agent GROK_HOME (its config is global, the login lives there)
-    mesh_servers = ()
-    clean_env = False
-    resume_flag = ("--resume",)
-    permission_args = ("--permission-mode", "default")
-    no_own_agents = "connects through your account and cannot get a moshi identity of its own. Start it from \"+\" → Grok"
-
-    def findings(self, ctx: Ctx, agent: Agent) -> List[str]:
-        return grok_findings(ctx.paths)
