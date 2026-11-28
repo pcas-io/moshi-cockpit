@@ -172,8 +172,9 @@ def running_elsewhere(paths: Paths, name: str, environ: Mapping[str, str] = os.e
     except HcError:
         return ""
     own = environ.get(HC_TERMINAL, "")
+    agent = find(paths, name)
     for terminal in terminals:
-        if terminal.agent_running and terminal.agent_name.lower() == name.lower() and terminal.address != own:
+        if terminal.runs(agent.name, agent.harness) and terminal.address != own:
             return terminal.address
     return ""
 

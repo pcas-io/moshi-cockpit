@@ -17,10 +17,10 @@ Read the agent-mesh skill first: everything there applies to you as well.
 
    | program | list the models | effort |
    |---|---|---|
-   | agy | `agy models` (the level is part of the name, e.g. `gemini-4-carbon-high`) | `--effort` also works |
-   | claude | `claude --help` (`--model`) | `--effort low…max` |
-   | codex | `codex --help` (`-m`) | translated by dispatch |
-   | grok | `grok models` | translated by dispatch |
+   | agy | `agy models` (the level is part of the name, e.g. `gemini-4-carbon-high`) | low, medium, high, xhigh, max |
+   | claude | `claude --help` (`--model`) | low, medium, high, xhigh, max |
+   | codex | `codex --help` (`-m`) | low, medium, high (translated by dispatch) |
+   | grok | `grok models` | low, medium, high (translated by dispatch) |
    | vibe | `vibe --help` (`--model` alias) | none: do not pass `--effort` |
 
    If a short name matches more than one model, ask.
@@ -42,7 +42,8 @@ Read the agent-mesh skill first: everything there applies to you as well.
 
 ## While it works
 
-- Wait for its ring, or watch it: `hc wait <address>` (never sleep or poll in a loop).
+- Wait for its ring, or watch it: `hc wait <address>` (never sleep or poll in a loop). Of hc, use only `wait`
+  and `get`; never `send`, `keys` or `run` yourself.
 - `hc get <address>` says `blocked`: the agent waits for a person (an approval or a question). Tell your person
   which tab it is. Never approve, type into it, or press keys there yourself.
 - More than one task at once: one agent per task. An agent runs in one terminal only; ask for another agent

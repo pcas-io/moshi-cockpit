@@ -19,6 +19,10 @@ from cockpit.text import clean
 
 AGENT_LABEL = "agent"
 TIMEOUT = 15
+START_TIMEOUT = 150  # hc run waits until the program is ready (up to a minute, with retries) before it answers
+# What herdr-core reports as the app of each harness: a label counts only while its agent's own program runs.
+HARNESS_APPS = {"claude": {"claude-code", "claude"}, "agy": {"antigravity", "agy"}, "codex": {"codex"},
+                "grok": {"grok"}, "vibe": {"vibe", "mistral-vibe"}}
 # An agent counts as running only while it reports its own status to herdr-core (OSC 7501): hc clears that
 # report when the terminal's shell returns to the foreground. A report that names a shell is refused as well.
 SHELLS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "pwsh", "elvish", "xonsh"})
@@ -50,6 +54,12 @@ class Terminal:
         return cls(address=address, app=_text(report.get("app")), status=_text(report.get("state")),
                    labels={k: v for k, v in labels.items() if isinstance(k, str) and isinstance(v, str)})
 
+    def runs(self, name: str, harness: str) -> bool:
+        """This terminal runs the agent `name` with its own program (not something else under a stale label)."""
+        app = self.app.rsplit("/", 1)[-1].lstrip("-").lower()
+        return (self.agent_running and self.agent_name.lower() == name.lower()
+                and app in HARNESS_APPS.get(harness, {harness}))
+
     @property
     def agent_name(self) -> str:
         return self.labels.get(AGENT_LABEL, "")
@@ -67,8 +77,8 @@ class Hc:
         self._binary = binary
         self._runner = runner
 
-    def _call(self, *args: str) -> Any:
-        code, out, err = self._runner([self._binary, *args, "--json"], TIMEOUT)
+    def _call(self, *args: str, timeout: int = TIMEOUT) -> Any:
+        code, out, err = self._runner([self._binary, *args, "--json"], timeout)
         if code != 0:
             raise HcError(f"hc {args[0]}: {_error_text(out, err)}")
         try:
@@ -109,7 +119,7 @@ class Hc:
             args += ["--parent", parent]
         if outlive_parent:
             args.append("--outlive-parent")
-        answer = self._call(*args, template, task)
+        answer = self._call(*args, template, task, timeout=START_TIMEOUT)
         if not isinstance(answer, dict) or not isinstance(answer.get("address"), str):
             raise HcError("hc run: no terminal address in its answer")
         return answer

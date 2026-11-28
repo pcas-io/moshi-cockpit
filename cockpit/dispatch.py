@@ -16,22 +16,26 @@ import os
 import re
 import secrets
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
 from cockpit import ring as ring_mod
-from cockpit import roster as roster_mod
 from cockpit.config import load_config
 from cockpit.harnesses.base import TOKEN_ENV
-from cockpit.hc import Hc
+from cockpit.hc import Hc, HcError
 from cockpit.mesh_files import TEMPLATE_ARGS, templates_dir
 from cockpit.paths import Paths
 from cockpit.registry import find
-from cockpit.status import Mesh
 from cockpit.text import clean
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# The values each program takes (claude and agy name all five in their --help; codex and grok name none there, so
+# only the common three are passed: refused before a start rather than a start that fails).
+EFFORT_VALUES = {"claude": EFFORTS, "agy": EFFORTS, "codex": ("low", "medium", "high"),
+                 "grok": ("low", "medium", "high"), "vibe": ()}
+STALE_SECONDS = 600  # a template older than this is a leftover of a start that was killed
 TEMPLATE_PREFIX = ".dispatch-"
 TEMPLATE_MARK = "short-lived moshi-cockpit dispatch template"
 JOB = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
@@ -69,6 +73,8 @@ def harness_args(harness: str, model: str = "", effort: str = "") -> List[str]:
         translate = EFFORT_ARGS.get(harness)
         if translate is None:
             raise ValueError(f"{harness} has no effort setting; leave out --effort")
+        if effort not in EFFORT_VALUES.get(harness, ()):
+            raise ValueError(f"{harness} takes --effort {', '.join(EFFORT_VALUES[harness])}")
         args += translate(effort)
     return args
 
@@ -100,21 +106,27 @@ def dispatch(paths: Paths, name: str, message_id: str, hc: Hc, model: str = "", 
     if not JOB.fullmatch(job):
         raise ValueError("--name has 1 to 32 of a-z 0-9 - _ and starts with a letter or digit")
     message = _checked_message(paths, agent.name, message_id, environ, fetch)
-    here = roster_mod.build(hc.terminals(), {}, Mesh(), roster_mod.MOSHI_OFF, "")
-    running = [row for row in here.running if row.name.lower() == agent.name.lower()]
+    sweep(paths)
+    terminals = hc.terminals()
+    running = [t for t in terminals if t.runs(agent.name, agent.harness)]
     if running:
         if extra:
             raise ValueError(f"{agent.name} runs already in {running[0].address}; end it first, or dispatch without "
                              "--model/--effort to ring it")
         return Outcome(ring_mod.paste(hc, agent.name, ring_mod.doorbell(message_id, message)), "rang")
-    caller = caller_terminal(environ)
-    labels = [] if hidden else _space_labels(hc, caller)
+    caller = next((t for t in terminals if t.address == caller_terminal(environ)), None)  # only a real terminal
+    labels = [] if hidden or caller is None else _space_labels(caller)
     template = templates_dir(paths) / f"{TEMPLATE_PREFIX}{job}-{secrets.token_hex(token_bytes)}.md"
-    _write_new(template, template_text(paths, agent.name, agent.harness, extra))
     try:
-        answer = hc.run_template(template.stem, ring_mod.doorbell(message_id, message), job, labels, parent=caller)
+        _write_new(template, template_text(paths, agent.name, agent.harness, extra))
+        answer = hc.run_template(template.stem, ring_mod.doorbell(message_id, message), job, labels,
+                                 parent=caller.address if caller else "")
+    except HcError as exc:
+        raise HcError(f"{exc}. {agent.name} may have started anyway: check moshi-cockpit roster before you "
+                      "dispatch again") from None
     finally:
-        template.unlink()
+        if template.exists():
+            template.unlink()
     address = answer["address"]
     first = answer.get("first_message") if isinstance(answer.get("first_message"), dict) else {}
     if not first.get("sent"):
@@ -139,11 +151,22 @@ def _checked_message(paths: Paths, name: str, message_id: str, environ: Mapping[
     return message
 
 
-def _space_labels(hc: Hc, caller: str) -> List[str]:
+def _space_labels(caller) -> List[str]:
     """The caller's Herdr space, so the new terminal shows as a tab beside it; none when it is not known."""
-    terminal = hc.terminal(caller) if caller else None
-    space = terminal.labels.get(SPACE_LABEL, "") if terminal else ""
+    space = caller.labels.get(SPACE_LABEL, "")
     return [f"{SPACE_LABEL}={space}"] if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", space) else []
+
+
+def sweep(paths: Paths, older_than: int = STALE_SECONDS) -> None:
+    """Removes dispatch templates left behind by a start that was killed (only files with our mark)."""
+    folder = templates_dir(paths)
+    now = time.time()
+    for path in folder.glob(f"{TEMPLATE_PREFIX}*.md") if folder.is_dir() else []:
+        try:
+            if now - path.stat().st_mtime >= older_than and TEMPLATE_MARK in path.read_text(encoding="utf-8")[:500]:
+                path.unlink()
+        except (OSError, UnicodeDecodeError):
+            continue
 
 
 def _write_new(path: Path, text: str) -> None:

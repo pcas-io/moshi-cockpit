@@ -240,8 +240,15 @@ agent's terminal. The rules every agent gets tell it to ring through `moshi-cock
   it its own.
 - hc sends a first message only to templates, so dispatch creates one short-lived template
   (`~/.config/herdr-core/templates/.dispatch-<job>-<random>.md`, created exclusively, mode 0600) with the
-  model and effort arguments, and removes it again right after the start, also when the start fails. Model
-  names are limited to letters, digits and `. _ : / -`, efforts to five words.
+  model and effort arguments, and removes it again right after the start, also when the start fails. A start
+  that was killed can leave one behind: the next dispatch removes such files after ten minutes, `uninstall`
+  at once, both only with our mark. Model names are limited to letters, digits and `. _ : / -`; an effort must
+  be one the program names (claude and agy: low to max; codex and grok: low, medium, high; vibe: none).
+- The parent and the Herdr space of a started agent come only from a terminal that exists: the caller's
+  address from its environment is looked up in herdr-core first. An agent counts as running only while its
+  own program runs under its label, so a label left on a terminal that now runs something else is ignored.
+- herdr-core answers a start only once the program is ready, which can take a minute; if that answer does not
+  come, dispatch says the agent may have started and to check the roster before dispatching again.
 - `run` shows the terminal where an agent runs already instead of starting it a second time (one identity,
   one terminal); `--take-over` starts it anyway. It asks herdr-core and herdr-app only where they install
   themselves under this HOME, never on `PATH`.

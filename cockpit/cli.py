@@ -202,6 +202,8 @@ def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
         shown = launch.focus(paths, elsewhere)
         print(f"{args.agent} runs already in {elsewhere}" + ("; its tab is in front now." if shown else ".")
               + f" To start it here anyway: moshi-cockpit run {args.agent} {TAKE_OVER}")
+        if terminal and not shown:
+            _hold_tab()  # otherwise this tab would vanish before the line can be read
         return 0
     try:
         start = launch.prepare(paths, keychain, args.agent, rest)
@@ -242,6 +244,7 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths) -> int:
     notes = BackupStore(paths.state).restore_all(keep=settings)
     hook_note = claude_hook.remove(paths)
     notes = notes + ([hook_note] if "nothing to remove" not in hook_note else [])
+    dispatch.sweep(paths, older_than=0)
     templates_note = mesh_files.remove_templates(paths)
     notes = notes + ([templates_note] if templates_note else [])
     for note in notes or ["nothing to restore"]:
