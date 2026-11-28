@@ -148,8 +148,9 @@ def label_terminal(paths: Paths, name: str, environ: Mapping[str, str] = os.envi
     the agent. Outside a herdr-core terminal, or without hc, nothing happens; an hc error is one warning, the
     start goes on."""
     terminal = environ.get(HC_TERMINAL, "")
-    on_path = lambda program: shutil.which(program, path=environ.get("PATH", ""))  # noqa: E731 (the start's PATH)
-    binary = find_binary(paths, which=on_path) if terminal else None
+    # Only herdr-core's own install places under this HOME, never PATH: a start must not reach a core that
+    # belongs to another HOME (a test's temporary one included).
+    binary = find_binary(paths, which=lambda program: None) if terminal else None
     if not binary:
         return
     try:

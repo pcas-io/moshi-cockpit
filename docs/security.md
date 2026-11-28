@@ -200,8 +200,12 @@ never types free text, presses no keys and reads no screen:
   own agent token (`mesh_get`) that the message exists and is addressed to the recipient. Without an own token
   (an agent started without `run`) ring refuses.
 - The address comes from the roster only, never from a message: the one live terminal labelled with that name
-  whose foreground program is not a shell. A label left on a shell (the agent has ended) is ignored, because a
-  line pasted there would run as a command. Two terminals with the same name are refused.
+  in which an agent reports its own status to herdr-core. herdr-core clears that report when the shell returns
+  to the foreground, so a label left behind by an agent that has ended is ignored: a line pasted into a shell,
+  a password prompt or a REPL would be submitted there. The terminal is checked once more right before the
+  paste. Two terminals with the same name are refused.
+- `run` looks for herdr-core only where it installs itself under this HOME (`~/.local/bin/hc`, the bundle),
+  never on `PATH`.
 - The line is `Moshi <id> — <type> from <sender>`: the type reduced to identifier characters, the sender
   without control characters, on one line.
 - `--without-record` pastes the given text, marked `[no-record]` and reduced to one line without control

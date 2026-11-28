@@ -19,27 +19,36 @@ from cockpit.text import clean
 
 AGENT_LABEL = "agent"
 TIMEOUT = 15
-# Foreground programs that are a shell, not an agent: a label left on such a terminal belongs to an agent that
-# has ended, and text pasted there would run as a command.
+# An agent counts as running only while it reports its own status to herdr-core (OSC 7501): hc clears that
+# report when the terminal's shell returns to the foreground. A report that names a shell is refused as well.
 SHELLS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "pwsh", "elvish", "xonsh"})
 
 Runner = Callable[[Sequence[str], int], Tuple[int, str, str]]
 
 
-class HcError(RuntimeError):
+class HcError(ValueError):
     """hc is missing, or answered with an error. The message is safe to print."""
 
 
 @dataclass(frozen=True)
 class Terminal:
     address: str
-    app: str  # what hc says runs in the foreground: claude-code, codex, zsh, ...
-    status: str  # the agent's own report (idle, working, done, blocked, error), "" for plain programs
+    app: str  # the agent that reports its status here (claude-code, codex, ...); "" when none does
+    status: str  # its report: idle, working, done, blocked, error
     labels: Dict[str, str] = field(default_factory=dict)
 
     @property
     def agent_running(self) -> bool:
-        return bool(self.app) and self.app not in SHELLS
+        name = self.app.rsplit("/", 1)[-1].lstrip("-").lower()
+        return bool(name) and name not in SHELLS
+
+    @classmethod
+    def from_get(cls, address: str, details: Any) -> "Terminal":
+        details = details if isinstance(details, dict) else {}
+        report = details.get("status") if isinstance(details.get("status"), dict) else {}
+        labels = details.get("labels") if isinstance(details.get("labels"), dict) else {}
+        return cls(address=address, app=_text(report.get("app")), status=_text(report.get("state")),
+                   labels={k: v for k, v in labels.items() if isinstance(k, str) and isinstance(v, str)})
 
     @property
     def agent_name(self) -> str:
@@ -68,19 +77,26 @@ class Hc:
             raise HcError(f"hc {args[0]}: answer is not JSON") from None
 
     def terminals(self) -> List[Terminal]:
-        """This machine's live terminals (no `machine/t7` addresses), each with its labels."""
-        listed = self._call("ls").get("terminals") or []
+        """This machine's live terminals (no `machine/t7` addresses), each with its labels and agent report. A
+        terminal that ends between the list and its details is left out."""
+        answer = self._call("ls")
+        listed = answer.get("terminals") if isinstance(answer, dict) else None
         found = []
-        for row in listed:
+        for row in listed if isinstance(listed, list) else []:
             address = row.get("address") if isinstance(row, dict) else None
             if not isinstance(address, str) or not address or "/" in address:
                 continue
-            details = self._call("get", address)
-            labels = details.get("labels") if isinstance(details, dict) else None
-            found.append(Terminal(address=address, app=_text(row.get("agent")), status=_status(row.get("status")),
-                                  labels={k: v for k, v in (labels or {}).items()
-                                          if isinstance(k, str) and isinstance(v, str)}))
+            terminal = self.terminal(address)
+            if terminal is not None:
+                found.append(terminal)
         return found
+
+    def terminal(self, address: str) -> Optional[Terminal]:
+        """One terminal as it is now; None when it is gone."""
+        try:
+            return Terminal.from_get(address, self._call("get", address))
+        except HcError:
+            return None
 
     def label(self, address: str, key: str, value: str) -> None:
         self._call("label", address, f"{key}={value}")
@@ -92,12 +108,6 @@ class Hc:
 
 def _text(value: Any) -> str:
     return clean(value, "", limit=64) if isinstance(value, str) else ""
-
-
-def _status(value: Any) -> str:
-    if isinstance(value, dict):  # `hc get` shape: {"app": ..., "state": ...}
-        value = value.get("state")
-    return _text(value)
 
 
 def _error_text(out: str, err: str) -> str:
